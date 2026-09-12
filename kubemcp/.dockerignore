@@ -1,0 +1,21 @@
+# Only pyproject.toml, uv.lock, src/ and README.md belong in the build context.
+.venv/
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+tests/
+.claude/
+CLAUDE.md
+Dockerfile
+.dockerignore
+.env
+.git/
+.gitignore
+*.md
+!README.md

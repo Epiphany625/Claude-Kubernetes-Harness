@@ -1,0 +1,92 @@
+[project]
+name = "kubemcp"
+version = "0.1.0"
+description = "Kubernetes MCP server: serves cluster reads, writes and diagnostics to AI agents."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+
+dependencies = [
+    "mcp>=2.2.0",
+    "kubernetes-asyncio>=36.1.0",
+    "pydantic>=2.12.0",
+    "pydantic-settings>=2.7.0",
+    "uvicorn>=0.34.0",
+    "starlette>=0.48.0",
+]
+
+[project.scripts]
+kubemcp = "kubemcp.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
+    "anyio>=4.9.0",
+    "aioresponses>=0.7.8",
+    "ruff>=0.9.0",
+    "mypy>=1.14.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kubemcp"]
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# `e2e` needs a live cluster, so it is deselected unless asked for explicitly.
+addopts = "-m 'not e2e' --strict-markers"
+markers = [
+    "e2e: requires a reachable Kubernetes cluster (deselected by default)",
+    "anyio: run an async test on anyio's plugin",
+]
+# The MCP SDK is anyio-based, so tests run on anyio's pytest plugin rather than
+# pytest-asyncio; that keeps client and server on one event loop. Async test
+# modules set `pytestmark = pytest.mark.anyio` and inherit the `anyio_backend`
+# fixture from tests/conftest.py.
+
+# ---------------------------------------------------------------------------
+# Lint / format
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "B",        # bugbear
+    "UP",       # pyupgrade
+    "RUF",      # ruff
+    "ASYNC",    # flake8-async
+    "S",        # bandit
+    "PTH",      # use pathlib
+]
+ignore = [
+    "S101",  # assert: fine in tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S", "B011"]
+
+# ---------------------------------------------------------------------------
+# Types
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+# kubernetes_asyncio ships no type information.
+[[tool.mypy.overrides]]
+module = ["kubernetes_asyncio.*", "aioresponses.*"]
+ignore_missing_imports = true
