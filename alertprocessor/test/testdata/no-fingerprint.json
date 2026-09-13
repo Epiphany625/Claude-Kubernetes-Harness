@@ -1,0 +1,24 @@
+{
+  "version": "4",
+  "groupKey": "{}:{alertname=\"HandRolledAlert\"}",
+  "status": "firing",
+  "receiver": "alertprocessor",
+  "groupLabels": { "alertname": "HandRolledAlert" },
+  "commonLabels": { "alertname": "HandRolledAlert" },
+  "commonAnnotations": { "summary": "Sent by something that is not Alertmanager 0.18+" },
+  "externalURL": "",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "HandRolledAlert",
+        "severity": "critical",
+        "node": "minikube"
+      },
+      "annotations": {},
+      "startsAt": "2026-09-13T11:00:00.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": ""
+    }
+  ]
+}

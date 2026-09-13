@@ -1,0 +1,60 @@
+{
+  "version": "4",
+  "groupKey": "{}/{}:{alertname=\"KubePodCrashLooping\", namespace=\"ckh\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "alertprocessor",
+  "groupLabels": {
+    "alertname": "KubePodCrashLooping",
+    "namespace": "ckh"
+  },
+  "commonLabels": {
+    "alertname": "KubePodCrashLooping",
+    "namespace": "ckh",
+    "severity": "warning",
+    "prometheus": "monitoring/monitoring-kube-prometheus-prometheus"
+  },
+  "commonAnnotations": {
+    "runbook_url": "https://runbooks.prometheus-operator.dev/runbooks/kubernetes/kubepodcrashlooping"
+  },
+  "externalURL": "http://monitoring-kube-prometheus-alertmanager.monitoring:9093",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "KubePodCrashLooping",
+        "namespace": "ckh",
+        "pod": "worker-7d8f6c9b4d-abcde",
+        "container": "worker",
+        "severity": "warning",
+        "prometheus": "monitoring/monitoring-kube-prometheus-prometheus"
+      },
+      "annotations": {
+        "summary": "Pod is crash looping.",
+        "description": "Pod ckh/worker-7d8f6c9b4d-abcde (worker) is in waiting state (reason: CrashLoopBackOff)."
+      },
+      "startsAt": "2026-09-13T10:00:00.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus:9090/graph?g0.expr=rate%28kube_pod_container_status_restarts_total%5B5m%5D%29",
+      "fingerprint": "a1b2c3d4e5f60718"
+    },
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "KubePodCrashLooping",
+        "namespace": "ckh",
+        "pod": "worker-7d8f6c9b4d-fghij",
+        "container": "worker",
+        "severity": "warning",
+        "prometheus": "monitoring/monitoring-kube-prometheus-prometheus"
+      },
+      "annotations": {
+        "summary": "Pod is crash looping."
+      },
+      "startsAt": "2026-09-13T10:00:30.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus:9090/graph",
+      "fingerprint": "b2c3d4e5f6071829"
+    }
+  ]
+}

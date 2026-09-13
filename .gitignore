@@ -219,3 +219,36 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---------------------------------------------------------------------------
+# Go
+# ---------------------------------------------------------------------------
+bin/
+*.exe
+*.test
+*.out
+# Test binaries and coverage
+coverage.out
+coverage.html
+# `go work` is per-developer, not per-repo
+go.work
+go.work.sum
+
+# ---------------------------------------------------------------------------
+# Secrets
+#
+# ops/**/secret.example.yaml is the committed template; the filled-in copy sits
+# next to it under the name below and must never be committed. Negations keep
+# the examples visible.
+# ---------------------------------------------------------------------------
+ops/**/secret.yaml
+ops/**/secrets.yaml
+ops/**/*-secret.yaml
+!ops/**/secret.example.yaml
+!ops/**/*-secret.example.yaml
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
