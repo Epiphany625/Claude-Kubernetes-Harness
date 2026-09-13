@@ -23,6 +23,8 @@ Transport = Literal["streamable-http", "stdio"]
 HostList = Annotated[list[str], NoDecode]
 
 
+# BaseSettings comes from pydantic-settings. 
+# Unlike a normal Pydantic BaseModel, it automatically knows how to read configuration from the environment.
 class Settings(BaseSettings):
     """Server settings. Every field is overridable via ``KUBEMCP_<FIELD>``."""
 

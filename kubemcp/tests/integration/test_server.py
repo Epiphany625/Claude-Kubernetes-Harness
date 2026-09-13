@@ -93,8 +93,7 @@ class TestTransportSecurity:
         # would otherwise reject every in-cluster request, since the Host is the
         # Service DNS name rather than localhost.
         security = transport_security(Settings(_env_file=None))
-        assert security.allowed_hosts == ["*"]
-        assert security.allowed_origins == ["*"]
+        assert security.enable_dns_rebinding_protection == False
 
     def test_uses_the_configured_allowlist(self) -> None:
         settings = Settings(

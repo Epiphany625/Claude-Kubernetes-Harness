@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, AsyncGenerator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
@@ -29,7 +29,7 @@ class _Runtime:
     kube: KubeClient | None = None
 
 
-INSTRUCTIONS = """\
+INSTRUCTIONS: str = """\
 Tools for inspecting and changing a Kubernetes cluster.
 
 Resources are addressed by apiVersion and kind, so the same tools work on built-in
@@ -66,7 +66,7 @@ def build_server(settings: Settings | None = None, kube: KubeClient | None = Non
     runtime = _Runtime()
 
     @asynccontextmanager
-    async def lifespan(_: MCPServer) -> AsyncIterator[AppContext]:
+    async def lifespan(_: MCPServer) -> AsyncGenerator[AppContext]:
         # Connecting once here, rather than per call, is what makes discovery
         # affordable: the API surface is fetched and cached at startup.
         client = kube or KubeClient(resolved)
@@ -134,9 +134,11 @@ def transport_security(settings: Settings) -> TransportSecuritySettings:
     the README calls it out. An empty allowlist means "allow any", which has to
     be stated explicitly rather than left to the default.
     """
+    if not settings.allowed_hosts:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
     return TransportSecuritySettings(
-        allowed_hosts=settings.allowed_hosts or ["*"],
-        allowed_origins=settings.allowed_origins or ["*"],
+        allowed_hosts=settings.allowed_hosts,
+        allowed_origins=settings.allowed_origins,
     )
 
 

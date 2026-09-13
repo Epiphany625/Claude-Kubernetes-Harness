@@ -4,7 +4,7 @@ An [MCP](https://modelcontextprotocol.io) server that gives AI agents access to 
 Kubernetes cluster: reads, writes, and the diagnostics needed to work out why
 something is broken.
 
-It is the cluster-access layer of the Claude Kubernetes Harness. The `harness/`
+It is the cluster-access layer of the Claude Kubernetes Harness (CKH). The `harness/`
 service runs an agent loop in a pod and calls this server over the network to see
 and change cluster state; `operator/` owns the CKH CRD, which these tools reach
 without any code here naming it.
@@ -62,29 +62,46 @@ KUBEMCP_TRANSPORT=stdio uv run kubemcp
 
 ---
 
+## Code Structure Explanation
+
+`/k8s`: everything related to starting up and interacting with k8s client. It helps `/tools` to execute Kubernetes commands.
+`/tools`: all MCP tools are defined in this folder.
+`validation.py`: Provides comprehensive input validation for icoming requests.
+`shaping.py`: Structure MCP response after a tool use.
+`models.py`: Request & response schemas definition.
+`config.py`: All important config variables, loaded from environment variables with provided default values.
+
+## Deploying to a Cluster
+
+To deploy this MCP server to the cluster, we at least still need:
+
+1. RBAC: Role with a good RBAC definition, Cluster Role Binding, Service Account
+2. Deployment, service
+3. Network Policy to determine which pod can acccess this MCP server.
+
 ## Tools
 
 Resources are addressed by `apiVersion` + `kind` through the dynamic client, so
 one small set of tools covers everything the cluster serves — built-in resources
 and custom resources alike. A CRD becomes reachable the moment it is registered.
 
-| Tool | Kind | Required arguments |
-|---|---|---|
-| `list_api_resources` | read | — |
-| `get_cluster_info` | read | — |
-| `list_resources` | read | `api_version`, `kind` |
-| `get_resource` | read | `api_version`, `kind`, `name` |
-| `describe_resource` | read | `api_version`, `kind`, `name` |
-| `get_pod_logs` | read | `name` |
-| `list_events` | read | — |
-| `get_top_metrics` | read | — |
-| `create_resource` | write | `manifest` |
-| `apply_resource` | write | `manifest` |
-| `patch_resource` | write | `api_version`, `kind`, `name`, `patch` |
-| `scale_resource` | write | `api_version`, `kind`, `name`, `replicas` |
-| `rollout_restart` | write | `kind`, `name` |
-| `delete_resource` | **destructive** | `api_version`, `kind`, `name` |
-| `exec_in_pod` | **destructive** | `name`, `command` |
+| Tool                 | Kind            | Required arguments                        |
+| -------------------- | --------------- | ----------------------------------------- |
+| `list_api_resources` | read            | —                                         |
+| `get_cluster_info`   | read            | —                                         |
+| `list_resources`     | read            | `api_version`, `kind`                     |
+| `get_resource`       | read            | `api_version`, `kind`, `name`             |
+| `describe_resource`  | read            | `api_version`, `kind`, `name`             |
+| `get_pod_logs`       | read            | `name`                                    |
+| `list_events`        | read            | —                                         |
+| `get_top_metrics`    | read            | —                                         |
+| `create_resource`    | write           | `manifest`                                |
+| `apply_resource`     | write           | `manifest`                                |
+| `patch_resource`     | write           | `api_version`, `kind`, `name`, `patch`    |
+| `scale_resource`     | write           | `api_version`, `kind`, `name`, `replicas` |
+| `rollout_restart`    | write           | `kind`, `name`                            |
+| `delete_resource`    | **destructive** | `api_version`, `kind`, `name`             |
+| `exec_in_pod`        | **destructive** | `name`, `command`                         |
 
 Every tool carries MCP `ToolAnnotations` (`read_only_hint`, `destructive_hint`,
 `idempotent_hint`) so a host can gate the destructive ones without parsing names.
@@ -93,9 +110,9 @@ Every mutating tool accepts `dry_run=true`.
 Three worth knowing about:
 
 - **`describe_resource`** is the diagnostic entry point. It returns the object,
-  its recent events, and plain-language observations — *"Container 'app' is
+  its recent events, and plain-language observations — _"Container 'app' is
   crash-looping (7 restarts). The reason it exited is in the previous
-  container's logs: call get_pod_logs with previous=true"* — in one round trip
+  container's logs: call get_pod_logs with previous=true"_ — in one round trip
   instead of three.
 - **`get_pod_logs`** takes `previous=true`, which is the only way to see why a
   CrashLoopBackOff pod died: the current container hasn't produced the failure yet.
@@ -120,7 +137,7 @@ few list calls bury the caller's context. So:
 - `view="summary"` (the default) projects each kind down to the fields someone
   would actually look at. Measured against a live cluster, a summarised Pod is
   **9% the size** of the full object. `view="full"` returns the pruned whole object.
-- Every result is byte-budgeted, and truncation is *always reported*
+- Every result is byte-budgeted, and truncation is _always reported_
   (`truncated`, `dropped`). A silently short list reads as "that's everything",
   which is worse than saying the result is incomplete.
 
@@ -149,26 +166,26 @@ token; a 404 names the object and points at `list_api_resources`.
 All settings are environment variables prefixed `KUBEMCP_`. List values accept
 either a comma-separated string or JSON, so Helm values work directly.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `KUBEMCP_TRANSPORT` | `streamable-http` | `streamable-http` or `stdio`. |
-| `KUBEMCP_HOST` | `0.0.0.0` | Bind address. Must not be `127.0.0.1` in a container. |
-| `KUBEMCP_PORT` | `8080` | Listen port. |
-| `KUBEMCP_MCP_PATH` | `/mcp` | Path the MCP endpoint is served at. |
-| **`KUBEMCP_ALLOWED_HOSTS`** | *(empty = any)* | **Host header allowlist — see below.** |
-| `KUBEMCP_ALLOWED_ORIGINS` | *(empty = any)* | Origin allowlist; only matters for browser callers. |
-| `KUBEMCP_KUBECONFIG` | *(unset)* | Path to a kubeconfig. Unset → in-cluster, then `~/.kube/config`. |
-| `KUBEMCP_KUBE_CONTEXT` | *(unset)* | kubeconfig context. Ignored in-cluster. |
-| `KUBEMCP_DEFAULT_NAMESPACE` | `default` | Namespace used when a call omits one. |
-| `KUBEMCP_REQUEST_TIMEOUT_SECONDS` | `30` | Per-request apiserver timeout. |
-| `KUBEMCP_MAX_CONCURRENT_REQUESTS` | `16` | In-flight apiserver requests, so one agent can't swamp it. |
-| `KUBEMCP_MAX_RESPONSE_BYTES` | `96000` | Byte ceiling on one tool result. |
-| `KUBEMCP_MAX_LOG_BYTES` | `64000` | Byte ceiling on a log fetch. |
-| `KUBEMCP_MAX_EXEC_OUTPUT_BYTES` | `32000` | Byte ceiling on exec output. |
-| `KUBEMCP_MAX_LIST_ITEMS` | `200` | Hard ceiling on items from a list call. |
-| `KUBEMCP_EXEC_TIMEOUT_SECONDS` | `60` | Wall-clock ceiling on one exec. |
-| `KUBEMCP_FIELD_MANAGER` | `kubemcp` | Field manager recorded for server-side apply. |
-| `KUBEMCP_LOG_LEVEL` | `INFO` | `DEBUG`…`CRITICAL`. |
+| Variable                          | Default           | Purpose                                                          |
+| --------------------------------- | ----------------- | ---------------------------------------------------------------- |
+| `KUBEMCP_TRANSPORT`               | `streamable-http` | `streamable-http` or `stdio`.                                    |
+| `KUBEMCP_HOST`                    | `0.0.0.0`         | Bind address. Must not be `127.0.0.1` in a container.            |
+| `KUBEMCP_PORT`                    | `8080`            | Listen port.                                                     |
+| `KUBEMCP_MCP_PATH`                | `/mcp`            | Path the MCP endpoint is served at.                              |
+| **`KUBEMCP_ALLOWED_HOSTS`**       | _(empty = any)_   | **Host header allowlist — see below.**                           |
+| `KUBEMCP_ALLOWED_ORIGINS`         | _(empty = any)_   | Origin allowlist; only matters for browser callers.              |
+| `KUBEMCP_KUBECONFIG`              | _(unset)_         | Path to a kubeconfig. Unset → in-cluster, then `~/.kube/config`. |
+| `KUBEMCP_KUBE_CONTEXT`            | _(unset)_         | kubeconfig context. Ignored in-cluster.                          |
+| `KUBEMCP_DEFAULT_NAMESPACE`       | `default`         | Namespace used when a call omits one.                            |
+| `KUBEMCP_REQUEST_TIMEOUT_SECONDS` | `30`              | Per-request apiserver timeout.                                   |
+| `KUBEMCP_MAX_CONCURRENT_REQUESTS` | `16`              | In-flight apiserver requests, so one agent can't swamp it.       |
+| `KUBEMCP_MAX_RESPONSE_BYTES`      | `96000`           | Byte ceiling on one tool result.                                 |
+| `KUBEMCP_MAX_LOG_BYTES`           | `64000`           | Byte ceiling on a log fetch.                                     |
+| `KUBEMCP_MAX_EXEC_OUTPUT_BYTES`   | `32000`           | Byte ceiling on exec output.                                     |
+| `KUBEMCP_MAX_LIST_ITEMS`          | `200`             | Hard ceiling on items from a list call.                          |
+| `KUBEMCP_EXEC_TIMEOUT_SECONDS`    | `60`              | Wall-clock ceiling on one exec.                                  |
+| `KUBEMCP_FIELD_MANAGER`           | `kubemcp`         | Field manager recorded for server-side apply.                    |
+| `KUBEMCP_LOG_LEVEL`               | `INFO`            | `DEBUG`…`CRITICAL`.                                              |
 
 ### ⚠️ `KUBEMCP_ALLOWED_HOSTS` — the most likely cause of a failed first deploy
 
@@ -243,17 +260,17 @@ uv run mypy src                            # strict mode, kept clean
 274 unit and integration tests run with **no cluster running**, plus 6 e2e tests
 that need one.
 
-| Suite | What it exercises | Needs a cluster |
-|---|---|---|
-| `tests/unit/` | Validators, shaping/projection/truncation, error mapping, config. Pure functions. | no |
-| `tests/integration/` | The **real MCP protocol** (in-process `Client`: initialize → tools/list → tools/call) → the **real** `kubernetes_asyncio` client → a **real** local HTTP server that behaves like an apiserver. | no |
-| `tests/e2e/` | The same tools against a live cluster: apply, describe, logs, exec with exit codes, delete. Marked `e2e`, deselected by default. | yes |
+| Suite                | What it exercises                                                                                                                                                                               | Needs a cluster |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| `tests/unit/`        | Validators, shaping/projection/truncation, error mapping, config. Pure functions.                                                                                                               | no              |
+| `tests/integration/` | The **real MCP protocol** (in-process `Client`: initialize → tools/list → tools/call) → the **real** `kubernetes_asyncio` client → a **real** local HTTP server that behaves like an apiserver. | no              |
+| `tests/e2e/`         | The same tools against a live cluster: apply, describe, logs, exec with exit codes, delete. Marked `e2e`, deselected by default.                                                                | yes             |
 
-The integration layer fakes only the cluster's *contents*, not the client: path
+The integration layer fakes only the cluster's _contents_, not the client: path
 construction, query-parameter encoding, serialization and error handling all run
 exactly as they would in production. (`aioresponses` doesn't support aiohttp 3.14,
 and a real server turned out to be the better tool anyway — it can reproduce the
-apiserver's *refusals*, which is where the interesting bugs live.)
+apiserver's _refusals_, which is where the interesting bugs live.)
 
 Running e2e:
 
@@ -289,13 +306,13 @@ picked up automatically.
 
 ## How it is built
 
-| Concern | Choice | Why |
-|---|---|---|
-| MCP | [`mcp`](https://pypi.org/project/mcp/) 2.2 (official Python SDK) | Type hints become the tool schema; Pydantic return types become the `outputSchema` and are validated before results leave the server. |
+| Concern    | Choice                                                                    | Why                                                                                                                                                              |
+| ---------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MCP        | [`mcp`](https://pypi.org/project/mcp/) 2.2 (official Python SDK)          | Type hints become the tool schema; Pydantic return types become the `outputSchema` and are validated before results leave the server.                            |
 | Kubernetes | [`kubernetes-asyncio`](https://pypi.org/project/kubernetes-asyncio/) 36.1 | Native async, so a concurrent server doesn't depend on a thread pool. Ships the dynamic client (any GVK, including CRDs), websocket exec, and in-cluster config. |
-| Validation | Pydantic 2 + `validation.py` | Constraints are published in the tool schema *and* enforced server-side. |
-| Transport | Starlette + uvicorn | What the SDK's streamable-HTTP app is built on. |
-| Tooling | uv, ruff, mypy (strict), pytest + anyio | anyio rather than pytest-asyncio because the SDK is anyio-based; mixing them causes event-loop mismatches. |
+| Validation | Pydantic 2 + `validation.py`                                              | Constraints are published in the tool schema _and_ enforced server-side.                                                                                         |
+| Transport  | Starlette + uvicorn                                                       | What the SDK's streamable-HTTP app is built on.                                                                                                                  |
+| Tooling    | uv, ruff, mypy (strict), pytest + anyio                                   | anyio rather than pytest-asyncio because the SDK is anyio-based; mixing them causes event-loop mismatches.                                                       |
 
 ### Code map
 
