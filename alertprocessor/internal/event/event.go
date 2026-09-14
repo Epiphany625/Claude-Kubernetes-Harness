@@ -141,33 +141,15 @@ func (e Event) RoutingKey(prefix string) string {
 	if prefix == "" {
 		prefix = "alert"
 	}
-	severity := sanitizeRoutingSegment(e.Severity)
+	severity := strings.ToLower(strings.TrimSpace(e.Severity))
 	if severity == "" {
 		severity = "unknown"
 	}
-	state := sanitizeRoutingSegment(string(e.AlertState))
+	state := strings.ToLower(strings.TrimSpace(string(e.AlertState)))
 	if state == "" {
 		state = "unknown"
 	}
 	return prefix + "." + state + "." + severity
-}
-
-// sanitizeRoutingSegment strips the characters AMQP treats as structure. A label
-// value is arbitrary user input from a PrometheusRule; a severity of "very.bad"
-// would otherwise add a fourth segment and escape every three-segment binding.
-func sanitizeRoutingSegment(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
-			b.WriteRune(r)
-		default:
-			// '.', '*', '#', whitespace and anything else become '_'.
-			b.WriteRune('_')
-		}
-	}
-	return b.String()
 }
 
 // Fingerprint derives a stable identifier from a label set, for senders that

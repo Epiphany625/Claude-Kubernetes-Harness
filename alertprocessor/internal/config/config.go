@@ -19,23 +19,6 @@ import (
 // EnvPrefix is prepended to every variable name this package reads.
 const EnvPrefix = "ALERTPROCESSOR_"
 
-// PoolMode describes how the Postgres endpoint we connect to pools connections.
-// It is not cosmetic: it decides whether pgx may use prepared statements.
-type PoolMode string
-
-const (
-	// PoolModeSession is a direct connection (Supabase port 5432, or any plain
-	// Postgres). Each connection is ours for its lifetime, so the prepared
-	// statement cache is valid and worth having.
-	PoolModeSession PoolMode = "session"
-
-	// PoolModeTransaction is a transaction-mode pooler in front of Postgres
-	// (Supabase's pooler on port 6543, pgbouncer generally). The backend
-	// connection changes between transactions, so a statement prepared on one
-	// is not there on the next. pgx must send queries unprepared.
-	PoolModeTransaction PoolMode = "transaction"
-)
-
 // Config is the fully resolved configuration. Built only by Load.
 type Config struct {
 	HTTP     HTTPConfig
@@ -47,11 +30,6 @@ type Config struct {
 type HTTPConfig struct {
 	Addr        string
 	WebhookPath string
-	// WebhookToken is the shared bearer token Alertmanager presents. Empty
-	// disables authentication -- a deliberate escape hatch for first-run and
-	// local testing, logged loudly at startup so it is not an accident that
-	// survives to a shared cluster.
-	WebhookToken string
 	// MaxBodyBytes caps a single webhook payload. A node failure can alert on
 	// hundreds of pods at once, so this is generous; it exists to bound memory,
 	// not to be a policy.
@@ -73,7 +51,6 @@ type PostgresConfig struct {
 	Password       string
 	Database       string
 	SSLMode        string
-	PoolMode       PoolMode
 	MaxConns       int32
 	MinConns       int32
 	ConnectTimeout time.Duration
@@ -117,7 +94,6 @@ func Load() (*Config, error) {
 		HTTP: HTTPConfig{
 			Addr:            env("HTTP_ADDR", ":8080"),
 			WebhookPath:     env("WEBHOOK_PATH", "/api/v1/alerts"),
-			WebhookToken:    env("WEBHOOK_TOKEN", ""),
 			MaxBodyBytes:    envInt64("MAX_BODY_BYTES", 8<<20, &errs), // 8 MiB
 			ReadTimeout:     envDuration("HTTP_READ_TIMEOUT", 15*time.Second, &errs),
 			WriteTimeout:    envDuration("HTTP_WRITE_TIMEOUT", 30*time.Second, &errs),
@@ -132,7 +108,6 @@ func Load() (*Config, error) {
 			Password:       env("POSTGRES_PASSWORD", ""),
 			Database:       env("POSTGRES_DATABASE", ""),
 			SSLMode:        env("POSTGRES_SSLMODE", ""),
-			PoolMode:       PoolMode(strings.ToLower(env("POSTGRES_POOL_MODE", string(PoolModeSession)))),
 			MaxConns:       int32(envInt("POSTGRES_MAX_CONNS", 10, &errs)),
 			MinConns:       int32(envInt("POSTGRES_MIN_CONNS", 0, &errs)),
 			ConnectTimeout: envDuration("POSTGRES_CONNECT_TIMEOUT", 10*time.Second, &errs),
@@ -178,10 +153,6 @@ func Load() (*Config, error) {
 		cfg.AMQP.URL = amqpURL
 	}
 
-	if cfg.Postgres.PoolMode != PoolModeSession && cfg.Postgres.PoolMode != PoolModeTransaction {
-		fail("%sPOSTGRES_POOL_MODE: %q is not one of %q, %q",
-			EnvPrefix, cfg.Postgres.PoolMode, PoolModeSession, PoolModeTransaction)
-	}
 	if cfg.Postgres.MaxConns < 1 {
 		fail("%sPOSTGRES_MAX_CONNS must be at least 1", EnvPrefix)
 	}
@@ -214,9 +185,6 @@ func Load() (*Config, error) {
 	}
 	return cfg, nil
 }
-
-// AuthEnabled reports whether the webhook checks a bearer token.
-func (c HTTPConfig) AuthEnabled() bool { return c.WebhookToken != "" }
 
 // resolveDSN merges the discrete POSTGRES_* variables over the DSN.
 //

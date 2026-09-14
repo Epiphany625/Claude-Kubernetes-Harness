@@ -43,37 +43,16 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.HTTP.WebhookPath != "/api/v1/alerts" {
 		t.Errorf("HTTP.WebhookPath = %q", cfg.HTTP.WebhookPath)
 	}
-	if cfg.HTTP.AuthEnabled() {
-		t.Error("auth should default to disabled when no token is set")
-	}
 	if cfg.AMQP.Exchange != "alerts" || cfg.AMQP.Queue != "agent.events" {
 		t.Errorf("AMQP topology defaults = %q / %q", cfg.AMQP.Exchange, cfg.AMQP.Queue)
 	}
 	if !cfg.Postgres.AutoMigrate {
 		t.Error("DB_AUTO_MIGRATE should default to true so a fresh database works")
 	}
-	if cfg.Postgres.PoolMode != config.PoolModeSession {
-		t.Errorf("PoolMode = %q, want session", cfg.Postgres.PoolMode)
-	}
-}
-
-func TestAuthEnabledFollowsToken(t *testing.T) {
-	vars := minimal()
-	vars["WEBHOOK_TOKEN"] = "s3cret"
-	setenv(t, vars)
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if !cfg.HTTP.AuthEnabled() {
-		t.Error("a non-empty token must enable authentication")
-	}
 }
 
 func TestLoadReportsEveryProblemAtOnce(t *testing.T) {
 	vars := minimal()
-	vars["POSTGRES_POOL_MODE"] = "bogus"
 	vars["LOG_FORMAT"] = "xml"
 	vars["WEBHOOK_PATH"] = "no-leading-slash"
 	setenv(t, vars)
@@ -84,7 +63,7 @@ func TestLoadReportsEveryProblemAtOnce(t *testing.T) {
 	}
 	// A misconfigured deployment usually has more than one wrong variable, and
 	// fixing them one CrashLoopBackOff at a time is miserable.
-	for _, want := range []string{"POOL_MODE", "LOG_FORMAT", "WEBHOOK_PATH"} {
+	for _, want := range []string{"LOG_FORMAT", "WEBHOOK_PATH"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error does not mention %s:\n%v", want, err)
 		}
@@ -205,49 +184,6 @@ func TestPostgresExplicitSSLModeWins(t *testing.T) {
 	if !strings.Contains(cfg.Postgres.DSN, "sslmode=disable") {
 		t.Errorf("DSN %q overrode an explicit sslmode", cfg.Postgres.DSN)
 	}
-}
-
-func TestPostgresPoolMode(t *testing.T) {
-	t.Run("transaction is accepted", func(t *testing.T) {
-		vars := minimal()
-		vars["POSTGRES_POOL_MODE"] = "transaction"
-		setenv(t, vars)
-
-		cfg, err := config.Load()
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-		if cfg.Postgres.PoolMode != config.PoolModeTransaction {
-			t.Errorf("PoolMode = %q", cfg.Postgres.PoolMode)
-		}
-	})
-
-	t.Run("case is normalised", func(t *testing.T) {
-		vars := minimal()
-		vars["POSTGRES_POOL_MODE"] = "TRANSACTION"
-		setenv(t, vars)
-
-		cfg, err := config.Load()
-		if err != nil {
-			t.Fatalf("Load: %v", err)
-		}
-		if cfg.Postgres.PoolMode != config.PoolModeTransaction {
-			t.Errorf("PoolMode = %q", cfg.Postgres.PoolMode)
-		}
-	})
-
-	t.Run("anything else is rejected", func(t *testing.T) {
-		vars := minimal()
-		// "statement" is a real pgbouncer mode and a plausible typo. Silently
-		// falling back to session here would mean prepared statements against a
-		// pooler -- the failure this setting exists to prevent.
-		vars["POSTGRES_POOL_MODE"] = "statement"
-		setenv(t, vars)
-
-		if _, err := config.Load(); err == nil {
-			t.Fatal("expected pool mode 'statement' to be rejected")
-		}
-	})
 }
 
 func TestAMQPDiscreteOverrides(t *testing.T) {

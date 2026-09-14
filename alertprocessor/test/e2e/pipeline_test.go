@@ -300,7 +300,6 @@ func TestProbesAndMetrics(t *testing.T) {
 	}{
 		{"/healthz", http.StatusOK},
 		{"/readyz", http.StatusOK},
-		{"/metrics", http.StatusOK},
 	} {
 		t.Run(tc.path, func(t *testing.T) {
 			resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, tc.path))

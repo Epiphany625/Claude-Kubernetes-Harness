@@ -24,7 +24,7 @@ Language: Go.
 ┌─────────────────────────────────────────────────────────────────┐
 │  alertprocessor                                                  │
 │                                                                  │
-│   httpapi    auth → decode → project each alert into an Event    │
+│   httpapi    decode → project each alert into an Event            │
 │      │                                                           │
 │      ▼                                                           │
 │   processor  for each alert, in this order:                      │
@@ -89,7 +89,6 @@ a 4xx, so:
 | All alerts processed                     | 200  | —                                                        |
 | Batch was empty                          | 200  | Alertmanager never sends empty batches; nothing to retry |
 | Body will not parse                      | 400  | Retrying will not make it parse                          |
-| Bad or missing bearer token              | 401  | Same                                                     |
 | Any alert failed on Postgres or RabbitMQ | 500  | Exactly what a retry fixes                               |
 
 A partial failure returns 500 for the whole batch. The retry is safe: the alerts
@@ -114,8 +113,8 @@ internal/
     migrations/         0001_event.sql -- the schema's single source of truth
   queue/                Publisher interface, amqp091 implementation
   processor/            record → publish → mark, and the reasoning for that order
-  httpapi/              routes, webhook handler, probes, metrics, auth
-  obs/                  slog and Prometheus collectors
+  httpapi/              routes, webhook handler, probes
+  obs/                  slog setup
 test/
   e2e/                  live-cluster suite (-tags=e2e)
   testdata/             canned Alertmanager payloads
@@ -132,18 +131,6 @@ test/
 ## Running it
 
 ### Locally
-
-#### post gres:
-
-Option 1: use transaction pool mode: port 6543, mode = transaction
-
-```
-# replace password
-export ALERTPROCESSOR_POSTGRES_DSN="postgresql://postgres.xgkiixcinlyhuabbnfpa:<password>@aws-0-us-west-2.pooler.supabase.com:6543/postgres"
-export ALERTPROCESSOR_POSTGRES_POOL_MODE="transaction"
-```
-
-Option 2: use session pool mode: port 5432, mode = session
 
 #### rabbit mq:
 
@@ -233,7 +220,6 @@ generated password inside a YAML string.
 | -------------------- | ---------------- | ----------------------------------------------- |
 | `HTTP_ADDR`          | `:8080`          |                                                 |
 | `WEBHOOK_PATH`       | `/api/v1/alerts` | Must match the `url` in the AlertmanagerConfig  |
-| `WEBHOOK_TOKEN`      | _(empty)_        | Bearer token. **Empty disables authentication** |
 | `MAX_BODY_BYTES`     | `8388608`        | 8 MiB. Bounds memory on a large batch           |
 | `HTTP_READ_TIMEOUT`  | `15s`            |                                                 |
 | `HTTP_WRITE_TIMEOUT` | `30s`            | Must exceed `AMQP_PUBLISH_TIMEOUT`              |
@@ -247,31 +233,14 @@ generated password inside a YAML string.
 | `POSTGRES_DSN`                                                  | —         | `postgresql://user:pass@host:port/db?sslmode=require` |
 | `POSTGRES_HOST` / `_PORT` / `_USER` / `_PASSWORD` / `_DATABASE` | —         | Override parts of the DSN                             |
 | `POSTGRES_SSLMODE`                                              | `require` | Defaulted on; Supabase refuses plaintext              |
-| `POSTGRES_POOL_MODE`                                            | `session` | `session` or `transaction` — **see below**            |
 | `POSTGRES_MAX_CONNS`                                            | `10`      |                                                       |
 | `POSTGRES_CONNECT_TIMEOUT`                                      | `10s`     |                                                       |
 | `POSTGRES_QUERY_TIMEOUT`                                        | `5s`      | Per statement                                         |
 | `DB_AUTO_MIGRATE`                                               | `true`    | Applies the embedded schema at startup                |
 
-#### Supabase: pick the pool mode to match the port
-
-Supabase offers two endpoints, and getting this wrong produces an intermittent
-failure that looks like a load problem.
-
-| Endpoint          | Port | Set `POSTGRES_POOL_MODE` to |
-| ----------------- | ---- | --------------------------- |
-| Direct connection | 5432 | `session`                   |
-| Connection pooler | 6543 | `transaction`               |
-
-Behind the pooler, the backend connection changes between transactions, so a
-statement prepared on one is gone by the next. pgx caches prepared statements by
-default, and the result is `prepared statement "stmtcache_..." already exists` —
-only under concurrency, so it passes every test and fails in production.
-`transaction` mode switches pgx to unprepared execution and disables the cache.
-
 If you would rather the service not hold DDL rights, set `DB_AUTO_MIGRATE=false`
 and run [`internal/store/migrations/0001_event.sql`](internal/store/migrations/0001_event.sql)
-yourself — the Supabase SQL editor works fine.
+yourself.
 
 ### RabbitMQ
 
@@ -326,7 +295,7 @@ a state later is an ordinary migration.
 ```
 exchange      alerts            (topic, durable)
 routing key   alert.firing.critical
-queue         agent.events      (quorum, durable, DLX → agent.events.dlq)
+queue         agent.events      (quorum, durable)
 
 message_id      = event_id      ← deduplicate on this
 correlation_id  = alert_id
@@ -362,8 +331,7 @@ protocol for real: that the migration is re-runnable, that JSONB round-trips,
 that the deduplication index deduplicates a replayed notification and does _not_
 deduplicate a resolution or a re-fire, that concurrent duplicate inserts converge
 on one row, that publishes are confirmed, that an unroutable publish is an error,
-that a rejected message reaches the dead-letter queue, and that a publish
-recovers after the connection drops.
+and that a publish recovers after the connection drops.
 
 **E2E** (`-tags=e2e`) needs the pipeline deployed and
 `ALERTPROCESSOR_POSTGRES_DSN` pointing at the same database the service uses. It
@@ -442,18 +410,10 @@ not. Almost always an unroutable publish — the exchange exists, nothing is bou
 to it. Check the queue and the `alert.#` binding in `make rabbit-ui`. The service
 logs this explicitly rather than letting it pass.
 
-**`prepared statement ... already exists`, intermittently.** You are pointed at
-the Supabase pooler on 6543 with `POSTGRES_POOL_MODE=session`. Set it to
-`transaction`.
-
 **`PRECONDITION_FAILED` on startup.** The queue exists with different arguments
 than the service declares — usually a classic queue where it wants a quorum
 queue. Delete the queue, or set `AMQP_DECLARE_TOPOLOGY=false` and let whoever owns
 it declare it.
-
-**Every webhook answers 401.** `WEBHOOK_TOKEN` and the `alertprocessor-webhook-auth`
-Secret have diverged. Both must be the same value; the AlertmanagerConfig reads
-that Secret and the Deployment mounts it.
 
 ---
 

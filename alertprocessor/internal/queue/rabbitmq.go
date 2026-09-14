@@ -150,11 +150,7 @@ func (p *RabbitPublisher) reconnectLocked(ctx context.Context) error {
 	return nil
 }
 
-// Topology names derived from the configured exchange and queue.
-func (p *RabbitPublisher) dlxName() string { return p.cfg.Exchange + ".dlx" }
-func (p *RabbitPublisher) dlqName() string { return p.cfg.Queue + ".dlq" }
-
-// declareLocked creates the exchange, queue, bindings and dead-letter pair.
+// declareLocked creates the exchange, queue and binding.
 //
 // Idempotent as long as nothing else declares the same objects with different
 // arguments; if something does, RabbitMQ answers PRECONDITION_FAILED and closes
@@ -170,14 +166,6 @@ func (p *RabbitPublisher) declareLocked() error {
 		return fmt.Errorf("declare exchange %s: %w", p.cfg.Exchange, err)
 	}
 
-	// Fanout for the dead-letter exchange: a dead-lettered message keeps its
-	// original routing key, and fanout means the DLQ catches it whatever that
-	// key happens to be.
-	if err := ch.ExchangeDeclare(p.dlxName(), amqp.ExchangeFanout,
-		true, false, false, false, nil); err != nil {
-		return fmt.Errorf("declare dead-letter exchange %s: %w", p.dlxName(), err)
-	}
-
 	if p.cfg.Queue == "" {
 		return nil
 	}
@@ -186,8 +174,7 @@ func (p *RabbitPublisher) declareLocked() error {
 	// restart with the data intact. They work at a replication factor of one,
 	// which is what a single-node cluster gives.
 	queueArgs := amqp.Table{
-		"x-queue-type":           "quorum",
-		"x-dead-letter-exchange": p.dlxName(),
+		"x-queue-type": "quorum",
 	}
 	if _, err := ch.QueueDeclare(p.cfg.Queue,
 		true /*durable*/, false /*autoDelete*/, false /*exclusive*/, false /*noWait*/, queueArgs); err != nil {
@@ -196,20 +183,12 @@ func (p *RabbitPublisher) declareLocked() error {
 			p.cfg.Queue, config.EnvPrefix, err)
 	}
 
-	dlqArgs := amqp.Table{"x-queue-type": "quorum"}
-	if _, err := ch.QueueDeclare(p.dlqName(), true, false, false, false, dlqArgs); err != nil {
-		return fmt.Errorf("declare dead-letter queue %s: %w", p.dlqName(), err)
-	}
-
 	// `alert.#` catches every routing key this service produces, including
 	// severities it has never seen.
 	bindingKey := p.cfg.RoutingPrefix + ".#"
 	if err := ch.QueueBind(p.cfg.Queue, bindingKey, p.cfg.Exchange, false, nil); err != nil {
 		return fmt.Errorf("bind queue %s to %s on %s: %w",
 			p.cfg.Queue, p.cfg.Exchange, bindingKey, err)
-	}
-	if err := ch.QueueBind(p.dlqName(), "", p.dlxName(), false, nil); err != nil {
-		return fmt.Errorf("bind dead-letter queue %s to %s: %w", p.dlqName(), p.dlxName(), err)
 	}
 
 	return nil

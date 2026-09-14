@@ -109,7 +109,7 @@ func sampleEvent() event.Event {
 func TestProcessHappyPath(t *testing.T) {
 	st := &fakeStore{}
 	pub := &fakePublisher{}
-	p := processor.New(st, pub, nil, discardLogger())
+	p := processor.New(st, pub, discardLogger())
 
 	out := p.Process(context.Background(), sampleEvent())
 
@@ -146,7 +146,7 @@ func TestProcessRecordsBeforePublishing(t *testing.T) {
 	}}
 	pub := &publisherSpy{onPublish: func() { note("publish") }}
 
-	p := processor.New(st, pub, nil, discardLogger())
+	p := processor.New(st, pub, discardLogger())
 	p.Process(context.Background(), sampleEvent())
 
 	if len(order) != 2 || order[0] != "record" || order[1] != "publish" {
@@ -176,7 +176,7 @@ func TestProcessDuplicateNotYetPublished(t *testing.T) {
 		return store.RecordResult{EventID: existingID, Inserted: false, AlreadyPublished: false}, nil
 	}}
 	pub := &fakePublisher{}
-	p := processor.New(st, pub, nil, discardLogger())
+	p := processor.New(st, pub, discardLogger())
 
 	out := p.Process(context.Background(), sampleEvent())
 
@@ -216,7 +216,7 @@ func TestProcessSkipsAlreadyPublished(t *testing.T) {
 		}, nil
 	}}
 	pub := &fakePublisher{}
-	p := processor.New(st, pub, nil, discardLogger())
+	p := processor.New(st, pub, discardLogger())
 
 	out := p.Process(context.Background(), sampleEvent())
 
@@ -240,7 +240,7 @@ func TestProcessRecordFailure(t *testing.T) {
 		return store.RecordResult{}, wantErr
 	}}
 	pub := &fakePublisher{}
-	p := processor.New(st, pub, nil, discardLogger())
+	p := processor.New(st, pub, discardLogger())
 
 	out := p.Process(context.Background(), sampleEvent())
 
@@ -262,7 +262,7 @@ func TestProcessRecordFailure(t *testing.T) {
 func TestProcessPublishFailure(t *testing.T) {
 	st := &fakeStore{}
 	pub := &fakePublisher{err: errors.New("broker unreachable")}
-	p := processor.New(st, pub, nil, discardLogger())
+	p := processor.New(st, pub, discardLogger())
 
 	out := p.Process(context.Background(), sampleEvent())
 
@@ -285,7 +285,7 @@ func TestProcessPublishFailure(t *testing.T) {
 func TestProcessUnroutableIsReported(t *testing.T) {
 	st := &fakeStore{}
 	pub := &fakePublisher{err: fmt.Errorf("%w: no queue bound", queue.ErrUnroutable)}
-	p := processor.New(st, pub, nil, discardLogger())
+	p := processor.New(st, pub, discardLogger())
 
 	out := p.Process(context.Background(), sampleEvent())
 
@@ -306,7 +306,7 @@ func TestProcessUnroutableIsReported(t *testing.T) {
 func TestProcessMarkPublishedFailure(t *testing.T) {
 	st := &fakeStore{markErr: errors.New("write conflict")}
 	pub := &fakePublisher{}
-	p := processor.New(st, pub, nil, discardLogger())
+	p := processor.New(st, pub, discardLogger())
 
 	out := p.Process(context.Background(), sampleEvent())
 
@@ -332,7 +332,7 @@ func TestProcessBatchContinuesPastFailures(t *testing.T) {
 		return store.RecordResult{EventID: ev.EventID, Inserted: true}, nil
 	}}
 	pub := &fakePublisher{}
-	p := processor.New(st, pub, nil, discardLogger())
+	p := processor.New(st, pub, discardLogger())
 
 	events := make([]event.Event, 4)
 	for i := range events {

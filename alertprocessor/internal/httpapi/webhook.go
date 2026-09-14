@@ -19,7 +19,6 @@ import (
 //
 //   - 400 for a body we cannot parse. Retrying will not make it parse, and
 //     holding the sender in a retry loop over it delays real alerts behind it.
-//   - 401 for a bad token. Same reasoning.
 //   - 500 when any alert in the batch failed for an operational reason --
 //     Postgres unreachable, the broker refusing. These are exactly the cases a
 //     retry fixes.
@@ -28,13 +27,6 @@ import (
 // it drops the failed alerts on the floor with nothing anywhere recording that
 // it happened.
 func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
-	if !s.authorize(r) {
-		s.log.Warn("rejected webhook with missing or invalid bearer token",
-			"remote_addr", r.RemoteAddr)
-		writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "invalid or missing bearer token"})
-		return
-	}
-
 	// Belt and braces with the LimitReader inside Decode: MaxBytesReader also
 	// stops the client from streaming an unbounded body into the connection.
 	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes)
@@ -73,7 +65,6 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	events := payload.ToEvents(time.Now())
-	s.metrics.AlertsIngested(len(events))
 
 	s.log.Info("webhook delivery received",
 		"group_key", payload.GroupKey,

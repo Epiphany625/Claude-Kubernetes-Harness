@@ -24,8 +24,6 @@ Each has cost real debugging time. Check them before going deeper.
 | Your smoke test using `Watchdog` never arrives | Correct behaviour, but not for the reason you expect. Our route is *prepended* before the chart's `Watchdog → "null"` entry, so the chart does not shield us; the `alertname !~ "Watchdog\|InfoInhibitor"` matcher on our own route is what excludes it. Use `make smoke`. |
 | `make am-config` shows an empty config, or kubectl errors with "invalid value; expected string" | You are reading `.data.alertmanager\.yaml`, but prometheus-operator >= 0.78 stores it **gzipped** under `alertmanager.yaml.gz`. Use `make am-config`, which handles both. |
 | Rows exist but `published_at` is always NULL | Unroutable publish: the exchange exists, nothing is bound to it. The service logs this explicitly — grep for `unroutable`. |
-| `prepared statement ... already exists`, only sometimes | Pointed at the Supabase pooler (6543) with `POSTGRES_POOL_MODE=session`. Set it to `transaction`. |
-| Every alert fails with `failed to encode args[N]: ... cannot find encode plan`, or the server answers `invalid input syntax for type json` | A `jsonb` parameter reached pgx as a map or `[]byte`. `transaction` mode sends statements unprepared, so pgx never learns the parameter is jsonb and falls back to the Go type: a map matches nothing, `[]byte` matches *bytea* (hex). Serialise to `string` in `RecordEvent`. Works in `session` mode either way, which is how it ships. |
 | A rebuilt image rolls out successfully and still runs the old code | `minikube image load` keeps the image already in the cluster when the tag is unchanged, and `minikube image rm` refuses while a container uses it. `make load` builds inside minikube's daemon for this reason — check `minikube ssh -- docker images alertprocessor` against your local build id. |
 
 ## The chain, hop by hop
@@ -117,13 +115,11 @@ Reproduce the call yourself, bypassing Alertmanager:
 kubectl -n ckh port-forward svc/alertprocessor 8080:8080
 curl -sS -X POST http://localhost:8080/api/v1/alerts \
   -H 'Content-Type: application/json' \
-  -H "Authorization: Bearer $(kubectl -n ckh get secret alertprocessor-webhook-auth \
-        -o jsonpath='{.data.token}' | base64 -d)" \
   --data @test/testdata/firing-batch.json | jq
 ```
 
-If that works and Alertmanager's call does not, the difference is auth or
-routing, not the service.
+If that works and Alertmanager's call does not, the difference is routing, not
+the service.
 
 ### 4. Did the insert happen?
 
@@ -156,41 +152,7 @@ Check, in this order:
 make logs | grep -iE 'unroutable|nack|confirm'
 ```
 
-## Reading the service's own signals
-
-The service is scraped by the same Prometheus it serves.
-
-```promql
-rate(alertprocessor_alerts_received_total[5m])            # alerts arriving
-rate(alertprocessor_events_recorded_total[5m])            # by inserted/duplicate
-rate(alertprocessor_events_published_total[5m])           # by published/skipped
-rate(alertprocessor_event_failures_total[5m])             # by stage
-alertprocessor_dependency_up                              # postgres / rabbitmq
-```
-
-`event_failures_total` by `stage` is the fastest way to split "the pipeline is
-broken" into which half:
-
-- `record` — Postgres. Check `/readyz` and the DSN.
-- `publish` — RabbitMQ. Check for `unroutable` in the logs first.
-- `mark_published` — the message went out but the row was not updated. Rare; the
-  event is on the queue twice after the retry, which is why consumers dedupe on
-  `message_id`.
-
 ## Symptom-specific
-
-### Every webhook answers 401
-
-`ALERTPROCESSOR_WEBHOOK_TOKEN` and the `alertprocessor-webhook-auth` Secret have
-diverged. The AlertmanagerConfig reads that Secret and the Deployment mounts the
-same key, so they can only differ if one was edited alone.
-
-```bash
-kubectl -n ckh get secret alertprocessor-webhook-auth -o jsonpath='{.data.token}' | base64 -d
-kubectl -n ckh exec deploy/alertprocessor -- printenv ALERTPROCESSOR_WEBHOOK_TOKEN
-```
-
-Note the pod does not pick up a Secret change until it restarts: `make restart`.
 
 ### Webhooks answer 500 and Alertmanager keeps retrying
 

@@ -38,18 +38,6 @@ func quietLogger() *slog.Logger {
 // newStore starts one Postgres container for the test and returns a store with
 // the schema applied. The container is torn down by t.Cleanup.
 func newStore(t *testing.T) *store.PostgresStore {
-	return newStoreInMode(t, config.PoolModeSession)
-}
-
-// newStoreInMode is newStore with the pool mode chosen by the caller.
-//
-// Worth having as a seam, because the two modes are not the same client:
-// `transaction` switches pgx to QueryExecModeExec, which sends every statement
-// unprepared and therefore never learns its parameter types from the server.
-// A suite that only ever exercised `session` let a parameter pgx could not
-// encode reach production. Exec mode needs no pooler in front of it to be
-// tested -- it is a client-side choice -- so the same container serves both.
-func newStoreInMode(t *testing.T, mode config.PoolMode) *store.PostgresStore {
 	t.Helper()
 	ctx := context.Background()
 
@@ -79,7 +67,6 @@ func newStoreInMode(t *testing.T, mode config.PoolMode) *store.PostgresStore {
 
 	s, err := store.Open(ctx, config.PostgresConfig{
 		DSN:            dsn,
-		PoolMode:       mode,
 		MaxConns:       5,
 		ConnectTimeout: 15 * time.Second,
 		QueryTimeout:   10 * time.Second,
@@ -377,69 +364,6 @@ func TestPing(t *testing.T) {
 	s := newStore(t)
 	if err := s.Ping(context.Background()); err != nil {
 		t.Errorf("Ping on a healthy database: %v", err)
-	}
-}
-
-// The regression test for the bug this seam exists to catch.
-//
-// `transaction` mode is what runs against Supabase's pooler on 6543. It sends
-// every statement unprepared, so pgx never learns that $15 and $16 are jsonb and
-// offers them to the encoder with OID 0; it then has to match on the Go type
-// alone. `map[string]string` matches nothing -- a map is as plausibly hstore --
-// and the insert fails client-side with `cannot find encode plan`, having never
-// reached Postgres. Marshalling the maps in RecordEvent is what makes both modes
-// take the same path, and this test is what keeps them there.
-func TestRecordEventInTransactionPoolMode(t *testing.T) {
-	ctx := context.Background()
-	s := newStoreInMode(t, config.PoolModeTransaction)
-
-	ev := sampleEvent("fp-txmode", event.AlertFiring, time.Date(2026, 9, 13, 11, 0, 0, 0, time.UTC))
-	res, err := s.RecordEvent(ctx, ev)
-	if err != nil {
-		t.Fatalf("RecordEvent in transaction pool mode: %v", err)
-	}
-	if !res.Inserted {
-		t.Error("first insert should report Inserted")
-	}
-
-	got, found, err := s.GetEvent(ctx, res.EventID)
-	if err != nil || !found {
-		t.Fatalf("GetEvent: found=%v err=%v", found, err)
-	}
-	if got.Labels["pod"] != "worker-0" || len(got.Labels) != 3 {
-		t.Errorf("labels did not round-trip: %v", got.Labels)
-	}
-	if got.Annotations["summary"] != "Pod is crash looping." {
-		t.Errorf("annotations did not round-trip: %v", got.Annotations)
-	}
-
-	// raw_alert is the one that would fail *server-side* rather than in the
-	// client: json.RawMessage is a []byte, pgx maps []byte to bytea, and bytea
-	// in text format is hex -- so a regression here arrives as
-	// `invalid input syntax for type json`, which reads like bad input rather
-	// than a wrong parameter type. Assert on the stored jsonb kind, not just
-	// that the round-trip parses.
-	var rawType string
-	if err := s.Pool().QueryRow(ctx,
-		`SELECT jsonb_typeof(raw_alert) FROM event WHERE event_id = $1`,
-		res.EventID).Scan(&rawType); err != nil {
-		t.Fatalf("read jsonb_typeof(raw_alert): %v", err)
-	}
-	if rawType != "object" {
-		t.Errorf("raw_alert stored as jsonb %s, want object", rawType)
-	}
-
-	// Deduplication has to keep working here too: ON CONFLICT and the xmax
-	// trick both run through the same unprepared path.
-	dup, err := s.RecordEvent(ctx, sampleEvent("fp-txmode", event.AlertFiring, ev.StartsAt))
-	if err != nil {
-		t.Fatalf("duplicate insert in transaction pool mode: %v", err)
-	}
-	if dup.Inserted {
-		t.Error("the second arrival must not insert")
-	}
-	if dup.EventID != res.EventID {
-		t.Errorf("duplicate returned event_id %q, want the stored %q", dup.EventID, res.EventID)
 	}
 }
 

@@ -111,13 +111,8 @@ are the same thing here, and storing `''` makes `WHERE cluster IS NULL` miss row
 that have no cluster.
 
 **A `jsonb` column takes a `string`, never a map or `[]byte`.** Use
-`jsonObject(...)` for a `map[string]string`; marshal anything else yourself. This
-looks like pedantry in `session` mode, where it works either way. Under
-`POSTGRES_POOL_MODE=transaction` pgx sends statements unprepared, never learns
-the parameter is jsonb, and falls back to the Go type: a map matches nothing
-(`cannot find encode plan`) and `[]byte` matches *bytea*, which text-encodes as
-hex and comes back as `invalid input syntax for type json`. `string` is encoded
-verbatim by both modes.
+`jsonObject(...)` for a `map[string]string`; marshal anything else yourself.
+`string` is encoded verbatim by pgx, which is the safe path for jsonb columns.
 
 ## 5. The read path
 
@@ -151,12 +146,6 @@ if got.Cluster != ev.Cluster {
 
 Assert on a **distinctive value**, not `"test"`. If every field is `"test"`, a
 shifted parameter list passes.
-
-For a `jsonb` column, add the same assertion to
-`TestRecordEventInTransactionPoolMode` (or build the store with
-`newStoreInMode(t, config.PoolModeTransaction)`). The round-trip test alone runs
-in `session` mode only, which is exactly the mode where a wrong parameter type is
-invisible.
 
 **Queue** — if consumers will read it, assert it survives in
 `TestPublishAndConsume`.

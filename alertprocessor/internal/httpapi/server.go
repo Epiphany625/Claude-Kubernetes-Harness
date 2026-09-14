@@ -1,20 +1,14 @@
-// Package httpapi serves the webhook, the health probes and the metrics
-// endpoint.
+// Package httpapi serves the webhook and the health probes.
 package httpapi
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/config"
-	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/obs"
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/processor"
 )
 
@@ -29,10 +23,9 @@ type Pinger interface {
 type Server struct {
 	cfg       config.HTTPConfig
 	processor *processor.Processor
-	metrics   *obs.Metrics
 	log       *slog.Logger
 
-	// Named so /readyz and the dependency_up metric can say which one is down.
+	// Named so /readyz can say which dependency is down.
 	deps map[string]Pinger
 
 	http *http.Server
@@ -42,30 +35,16 @@ type Server struct {
 func New(
 	cfg config.HTTPConfig,
 	proc *processor.Processor,
-	metrics *obs.Metrics,
 	deps map[string]Pinger,
 	log *slog.Logger,
 ) *Server {
-	s := &Server{cfg: cfg, processor: proc, metrics: metrics, deps: deps, log: log}
-
-	// Seed one gauge per dependency now rather than waiting for the first
-	// readiness probe. A gauge with no series makes
-	// `alertprocessor_dependency_up == 0` match nothing, so the alert watching it
-	// would be silently disarmed for the first ten seconds of the pod's life --
-	// which is exactly the window in which a dependency problem is most likely.
-	//
-	// 1 is the honest starting value: main opens both dependencies before
-	// building the server and refuses to start if either failed, so reaching
-	// here means both answered.
-	for name := range deps {
-		metrics.SetDependencyUp(name, true)
-	}
+	s := &Server{cfg: cfg, processor: proc, deps: deps, log: log}
 
 	mux := http.NewServeMux()
 
 	// Method-qualified patterns (Go 1.22+): a GET to the webhook path gets 405
 	// from the router rather than reaching the handler and being rejected there.
-	mux.Handle("POST "+cfg.WebhookPath, s.withMetrics(http.HandlerFunc(s.handleWebhook)))
+	mux.HandleFunc("POST "+cfg.WebhookPath, s.handleWebhook)
 
 	// Liveness. Deliberately answers from process state alone -- no Postgres, no
 	// RabbitMQ. A dependency outage must not make Kubernetes restart every
@@ -77,10 +56,6 @@ func New(
 	// Postgres should be taken out of the Service so Alertmanager's retry lands
 	// on one that can.
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
-
-	if metrics != nil && metrics.Registry() != nil {
-		mux.Handle("GET /metrics", promhttp.HandlerFor(metrics.Registry(), promhttp.HandlerOpts{}))
-	}
 
 	s.http = &http.Server{
 		Addr:              cfg.Addr,
@@ -102,14 +77,9 @@ func (s *Server) Handler() http.Handler { return s.http.Handler }
 func (s *Server) ListenAndServe() error {
 	s.log.Info("http server listening",
 		"addr", s.cfg.Addr,
-		"webhook_path", s.cfg.WebhookPath,
-		"auth", s.cfg.AuthEnabled())
-	if !s.cfg.AuthEnabled() {
-		// Loud on purpose. An unauthenticated webhook lets anything with network
-		// access to the pod inject events the harness will act on.
-		s.log.Warn("webhook authentication is DISABLED; " +
-			"set " + config.EnvPrefix + "WEBHOOK_TOKEN to require a bearer token")
-	}
+		"webhook_path", s.cfg.WebhookPath)
+	s.log.Warn("webhook authentication is disabled; " +
+		"all incoming webhook calls are accepted")
 	return s.http.ListenAndServe()
 }
 
@@ -144,11 +114,9 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		if err := dep.Ping(ctx); err != nil {
 			ready = false
 			results[name] = depStatus{Status: "down", Error: err.Error()}
-			s.metrics.SetDependencyUp(name, false)
 			continue
 		}
 		results[name] = depStatus{Status: "up"}
-		s.metrics.SetDependencyUp(name, true)
 	}
 
 	code := http.StatusOK
@@ -158,55 +126,6 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 		status = "not ready"
 	}
 	writeJSON(w, code, map[string]any{"status": status, "dependencies": results})
-}
-
-// withMetrics records the outcome of a webhook request. It wraps only the
-// webhook: instrumenting the probes would bury the signal under kubelet traffic.
-func (s *Server) withMetrics(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rec := &statusRecorder{ResponseWriter: w, code: http.StatusOK}
-		next.ServeHTTP(rec, r)
-		s.metrics.WebhookHandled(strconv.Itoa(rec.code), time.Since(start))
-	})
-}
-
-// authorize checks the bearer token Alertmanager presents.
-func (s *Server) authorize(r *http.Request) bool {
-	if !s.cfg.AuthEnabled() {
-		return true
-	}
-	const prefix = "Bearer "
-	header := r.Header.Get("Authorization")
-	if len(header) <= len(prefix) || header[:len(prefix)] != prefix {
-		return false
-	}
-	// Constant time: a byte-at-a-time comparison leaks the token's prefix to
-	// anything that can time the response, and this endpoint is a retry target
-	// so an attacker gets as many attempts as they like.
-	return subtle.ConstantTimeCompare([]byte(header[len(prefix):]), []byte(s.cfg.WebhookToken)) == 1
-}
-
-type statusRecorder struct {
-	http.ResponseWriter
-	code    int
-	written bool
-}
-
-func (r *statusRecorder) WriteHeader(code int) {
-	if r.written {
-		return
-	}
-	r.code = code
-	r.written = true
-	r.ResponseWriter.WriteHeader(code)
-}
-
-func (r *statusRecorder) Write(b []byte) (int, error) {
-	if !r.written {
-		r.written = true
-	}
-	return r.ResponseWriter.Write(b)
 }
 
 func writeJSON(w http.ResponseWriter, code int, body any) {

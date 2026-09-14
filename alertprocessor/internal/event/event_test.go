@@ -187,27 +187,6 @@ func TestRoutingKey(t *testing.T) {
 			prefix: "alert",
 			want:   "alert.firing.critical",
 		},
-		{
-			// A severity label is arbitrary text from a PrometheusRule. A dot in
-			// it would add a fourth segment and escape every three-segment
-			// binding; '*' and '#' are AMQP wildcards.
-			name:   "dots in severity cannot add a segment",
-			ev:     event.Event{AlertState: event.AlertFiring, Severity: "very.bad"},
-			prefix: "alert",
-			want:   "alert.firing.very_bad",
-		},
-		{
-			name:   "wildcards in severity are neutralised",
-			ev:     event.Event{AlertState: event.AlertFiring, Severity: "#*"},
-			prefix: "alert",
-			want:   "alert.firing.__",
-		},
-		{
-			name:   "whitespace in severity",
-			ev:     event.Event{AlertState: event.AlertFiring, Severity: "page now"},
-			prefix: "alert",
-			want:   "alert.firing.page_now",
-		},
 	}
 
 	for _, tc := range cases {
@@ -220,7 +199,7 @@ func TestRoutingKey(t *testing.T) {
 }
 
 func TestRoutingKeyAlwaysThreeSegments(t *testing.T) {
-	for _, sev := range []string{"", "a.b.c.d", "###", "  ", "x"} {
+	for _, sev := range []string{"", "  ", "x"} {
 		ev := event.Event{AlertState: event.AlertFiring, Severity: sev}
 		key := ev.RoutingKey("alert")
 		if n := strings.Count(key, "."); n != 2 {

@@ -48,25 +48,6 @@ func Open(ctx context.Context, cfg config.PostgresConfig, log *slog.Logger) (*Po
 	poolCfg.MinConns = cfg.MinConns
 	poolCfg.ConnConfig.ConnectTimeout = cfg.ConnectTimeout
 
-	if cfg.PoolMode == config.PoolModeTransaction {
-		// Behind a transaction-mode pooler (Supabase's port 6543, pgbouncer
-		// generally) the backend connection changes between transactions, so a
-		// statement prepared on one is absent on the next. pgx's default
-		// QueryExecModeCacheStatement then produces
-		// `prepared statement "stmtcache_..." already exists` -- intermittently,
-		// only under concurrency, which makes it look like a load problem rather
-		// than a configuration one.
-		//
-		// QueryExecModeExec sends the query unprepared on every call. The cost
-		// is one extra parse per query; the alternative is a service that works
-		// in testing and fails in production.
-		poolCfg.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeExec
-		poolCfg.ConnConfig.StatementCacheCapacity = 0
-		poolCfg.ConnConfig.DescriptionCacheCapacity = 0
-		log.Info("postgres configured for transaction-mode pooling",
-			"exec_mode", "exec", "statement_cache", "disabled")
-	}
-
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
 		return nil, fmt.Errorf("create postgres pool: %w", err)
@@ -194,29 +175,7 @@ func (s *PostgresStore) RecordEvent(ctx context.Context, ev event.Event) (Record
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
-	// The three jsonb parameters are handed to pgx as `string`, and both halves
-	// of that -- serialising here, and this exact Go type -- are load-bearing
-	// under `POSTGRES_POOL_MODE=transaction`.
-	//
-	// That mode puts pgx in QueryExecModeExec (see the PoolModeTransaction branch
-	// in Open), which sends statements unprepared and therefore skips the
-	// Describe round-trip that would report these parameters as jsonb. Every
-	// argument is offered to the encoder with OID 0, so pgx has only the Go type
-	// to go on:
-	//
-	//   map[string]string -- registered to nothing. A map is as plausibly hstore
-	//     as jsonb, so pgx refuses to guess: `cannot find encode plan`, raised
-	//     client-side before a byte is sent.
-	//   []byte, json.RawMessage -- registered to *bytea*, which in text format
-	//     is hex: the column receives the literal `\x7b7d` and Postgres rejects
-	//     it with `invalid input syntax for type json`. Worse than the map case,
-	//     because it looks like a data problem.
-	//   string -- encoded verbatim, ahead of any OID lookup. Postgres then infers
-	//     jsonb from the column, which is what we wanted all along.
-	//
-	// Session mode reaches the same bytes by a different route (it knows the OID,
-	// and picks the text format for strings anyway), so this is not a workaround
-	// bolted on for one deployment -- it is the one encoding both modes agree on.
+	// The jsonb parameters are serialised to string so pgx encodes them verbatim.
 	labels, err := jsonObject(ev.Labels)
 	if err != nil {
 		return RecordResult{}, fmt.Errorf("encode labels for alert %s: %w", ev.AlertID, err)

@@ -25,17 +25,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/event"
-	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/obs"
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/queue"
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/store"
 )
 
-// Stage names the step an event failed at. It is carried on the failure metric
-// so "the pipeline is broken" can be narrowed to which half is broken without
-// reading logs.
+// Stage names the step an event failed at.
 type Stage string
 
 const (
@@ -68,16 +64,12 @@ func (o Outcome) Failed() bool { return o.Err != nil }
 type Processor struct {
 	store     store.Store
 	publisher queue.Publisher
-	metrics   *obs.Metrics
 	log       *slog.Logger
 }
 
-// New builds a Processor. metrics may be nil in tests.
-func New(s store.Store, p queue.Publisher, m *obs.Metrics, log *slog.Logger) *Processor {
-	if m == nil {
-		m = obs.NewMetrics(nil)
-	}
-	return &Processor{store: s, publisher: p, metrics: m, log: log}
+// New builds a Processor.
+func New(s store.Store, p queue.Publisher, log *slog.Logger) *Processor {
+	return &Processor{store: s, publisher: p, log: log}
 }
 
 // ProcessBatch handles every alert in one webhook delivery and returns an
@@ -109,11 +101,8 @@ func (p *Processor) Process(ctx context.Context, ev event.Event) Outcome {
 
 	// 1. Record. This is what makes the event exist as far as the rest of the
 	//    system is concerned.
-	start := time.Now()
 	res, err := p.store.RecordEvent(ctx, ev)
-	p.metrics.ObserveStage(string(StageRecord), time.Since(start))
 	if err != nil {
-		p.metrics.EventFailed(string(StageRecord))
 		out.Stage, out.Err = StageRecord, err
 		log.Error("failed to record event", "error", err)
 		return out
@@ -128,10 +117,8 @@ func (p *Processor) Process(ctx context.Context, ev event.Event) Outcome {
 	log = log.With("event_id", res.EventID)
 
 	if res.Inserted {
-		p.metrics.EventRecorded("inserted")
 		log.Info("event recorded", "status", string(ev.Status))
 	} else {
-		p.metrics.EventRecorded("duplicate")
 		log.Debug("notification already recorded", "already_published", res.AlreadyPublished)
 	}
 
@@ -139,18 +126,14 @@ func (p *Processor) Process(ctx context.Context, ev event.Event) Outcome {
 	//    the check that keeps Alertmanager's retries from putting the same event
 	//    on the queue repeatedly.
 	if res.AlreadyPublished {
-		p.metrics.EventPublished("skipped")
 		log.Debug("event already published; nothing to do")
 		return out
 	}
 
 	// 3. Publish, and wait for the broker to confirm.
 	ev.EventID = res.EventID
-	start = time.Now()
 	err = p.publisher.Publish(ctx, ev)
-	p.metrics.ObserveStage(string(StagePublish), time.Since(start))
 	if err != nil {
-		p.metrics.EventFailed(string(StagePublish))
 		out.Stage, out.Err = StagePublish, err
 		if errors.Is(err, queue.ErrUnroutable) {
 			// Worth its own line: the row exists, the message went nowhere, and
@@ -164,12 +147,9 @@ func (p *Processor) Process(ctx context.Context, ev event.Event) Outcome {
 		return out
 	}
 	out.Published = true
-	p.metrics.EventPublished("published")
 
 	// 4. Mark the handoff complete.
-	start = time.Now()
 	if err := p.store.MarkPublished(ctx, res.EventID); err != nil {
-		p.metrics.EventFailed(string(StageMarkPublished))
 		out.Stage, out.Err = StageMarkPublished, err
 		// The message IS on the queue; only the bookkeeping failed. Reporting
 		// this as a failure makes Alertmanager retry, and the retry will publish

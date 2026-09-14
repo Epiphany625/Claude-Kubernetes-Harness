@@ -16,8 +16,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/config"
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/httpapi"
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/obs"
@@ -42,7 +40,6 @@ func run() error {
 	}
 
 	log := obs.NewLogger(cfg.Log.Level, cfg.Log.Format)
-	metrics := obs.NewMetrics(prometheus.NewRegistry())
 
 	// Signals cancel this context, which unwinds the whole startup sequence --
 	// including a connection attempt that is retrying against a dependency that
@@ -52,7 +49,6 @@ func run() error {
 
 	log.Info("starting alertprocessor",
 		"postgres", config.Redacted(cfg.Postgres.DSN),
-		"postgres_pool_mode", string(cfg.Postgres.PoolMode),
 		"amqp", config.Redacted(cfg.AMQP.URL),
 		"exchange", cfg.AMQP.Exchange,
 		"queue", cfg.AMQP.Queue)
@@ -73,9 +69,9 @@ func run() error {
 	}
 	defer func() { _ = publisher.Close() }()
 
-	proc := processor.New(db, publisher, metrics, log)
+	proc := processor.New(db, publisher, log)
 
-	srv := httpapi.New(cfg.HTTP, proc, metrics, map[string]httpapi.Pinger{
+	srv := httpapi.New(cfg.HTTP, proc, map[string]httpapi.Pinger{
 		"postgres": db,
 		"rabbitmq": publisher,
 	}, log)

@@ -80,8 +80,8 @@ internal/
     migrations/ 0001_event.sql  ← the schema's single source of truth
   queue/        Publisher interface, amqp091 impl with confirms + lazy reconnect
   processor/    record → skip-if-published → publish → mark
-  httpapi/      routes, webhook handler, probes, metrics, bearer auth
-  obs/          slog + Prometheus collectors
+  httpapi/      routes, webhook handler, probes
+  obs/          slog setup
 test/e2e/       live-cluster suite
 test/testdata/  canned Alertmanager payloads
 ```
@@ -139,49 +139,12 @@ This also means Watchdog is not usable as a smoke test either way. Use
   key `alertmanager.yaml.gz`. Reading `.data.alertmanager\.yaml` gets you an
   empty value and a confusing template error, not a useful message.
 
-### Supabase transaction pooling breaks prepared statements
-
-Port 6543 is a transaction-mode pooler: the backend connection changes between
-transactions, so a statement prepared on one is gone by the next. pgx caches
-prepared statements by default and the result is `prepared statement
-"stmtcache_..." already exists` — only under concurrency, so it passes every test
-and fails in production. `POSTGRES_POOL_MODE=transaction` switches pgx to
-`QueryExecModeExec` and zeroes the cache. Port 5432 is direct; use `session`.
-
-And then the second half of the same trap: unprepared statements are never
-*described*, so pgx never learns its parameters' Postgres types and has only the
-Go type to go on. `map[string]string` is registered to nothing (`cannot find
-encode plan`, client-side); `[]byte` and `json.RawMessage` are registered to
-**bytea**, which text-encodes as hex and the server rejects with `invalid input
-syntax for type json`. Anything bound for a `jsonb` column must be serialised to
-a `string` in `RecordEvent` — `string` is encoded verbatim ahead of any OID
-lookup, and session mode agrees on the same bytes.
-
-This costs nothing in session mode, so it passes every test that only runs there.
-`TestRecordEventInTransactionPoolMode` exists so both modes are exercised; new
-integration tests that touch a new column should use `newStoreInMode` too.
-
 ### `sslmode` defaults to `require`, deliberately
 
 pgx's own default is `prefer`, which falls back to plaintext against a server
 that would have accepted TLS. Supabase refuses plaintext, so `prefer` turns a
 configuration error into an opaque connection failure. `config.resolveDSN` sets
 `require` when the DSN omits it.
-
-### A metric with no series cannot fire an alert
-
-PromQL over a metric that has never been observed returns *no data*, not an
-error. So `alertprocessor_dependency_up == 0` matches nothing until something
-sets that gauge, and the alert watching it is silently disarmed. Every label set
-that an alerting rule divides by or compares against is pre-initialised —
-counters in `obs.NewMetrics`, the dependency gauges in `httpapi.New`. If you add
-a metric that `ops/alerting/prometheusrule-ckh.yaml` reads, initialise it too.
-
-### Metric names are a contract with ops/
-
-`ops/alerting/prometheusrule-ckh.yaml` alerts on these names. Renaming one does
-not break a build or a test — it silently disarms the alert.
-`TestMetricsEndpointExportsTheAlertingContract` is the guard.
 
 ### One webhook delivery is many alerts
 
