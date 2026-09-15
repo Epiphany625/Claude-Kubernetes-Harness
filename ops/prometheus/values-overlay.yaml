@@ -1,0 +1,25 @@
+alertmanager:
+  config:
+    route:
+      receiver: "null"
+      group_by: ["alertname"]
+      routes:
+        - receiver: test-webhook
+          matchers:
+            - alertname="AlertProcessorTestAlert"
+          group_wait: 0s
+          group_interval: 10s
+          repeat_interval: 1m
+    receivers:
+      - name: "null"
+      - name: test-webhook
+        webhook_configs:
+          # Cross-namespace format: http://<service>.<namespace>.svc:<port>/<path>
+          # helm upgrade --install monitoring \
+          # prometheus-community/kube-prometheus-stack \
+          # --namespace monitoring \
+          # --create-namespace \
+          # -f ops/prometheus/values-overlay.yaml
+
+          - url: "http://alertprocessor.ckh.svc:8080/api/v1/alerts"
+            send_resolved: true

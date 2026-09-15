@@ -1,0 +1,22 @@
+# Always-firing synthetic alert used to exercise the Alertmanager -> alertprocessor
+# webhook path. The `release: monitoring` label is what the Prometheus CR's
+# ruleSelector matches on; without it the operator ignores this rule entirely.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: alertprocessor-test
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: alertprocessor-test
+      rules:
+        - alert: AlertProcessorTestAlert
+          expr: vector(1)
+          for: 0m
+          labels:
+            severity: warning
+            namespace: ckh
+          annotations:
+            summary: "Synthetic alert that keeps the alertprocessor webhook exercised."
