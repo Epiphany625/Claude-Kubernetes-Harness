@@ -73,11 +73,8 @@ load: ## Build the image directly inside minikube's Docker daemon
 # --- Deploy ---------------------------------------------------------------
 
 .PHONY: deploy
-deploy: ## Apply the service manifests (not the Secret -- see ops/alertprocessor/secret.example.yaml)
-	kubectl apply -f ../ops/alertprocessor/configmap.yaml
-	kubectl apply -f ../ops/alertprocessor/deployment.yaml
-	kubectl apply -f ../ops/alertprocessor/service.yaml
-	kubectl apply -f ../ops/alertprocessor/servicemonitor.yaml
+deploy: ## Apply Deployment and Service (apply ops/alertprocessor/secret.yaml first)
+	kubectl apply -f ../ops/alertprocessor/alertprocessor.yaml
 
 .PHONY: route
 route: ## Point Alertmanager at the webhook (patch + AlertmanagerConfig)

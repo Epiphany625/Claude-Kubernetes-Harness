@@ -101,25 +101,6 @@ will ever receive. That is the most likely failure before `harness/` exists.
 
 ---
 
-## Layout
-
-```
-cmd/alertprocessor/     wiring, signals, graceful shutdown
-internal/
-  config/               ALERTPROCESSOR_* env parsing and validation
-  alertmanager/         webhook payload types, fingerprint fallback, projection
-  event/                Event, the status vocabulary, routing keys
-  store/                Store interface, pgx implementation, embedded migration
-    migrations/         0001_event.sql -- the schema's single source of truth
-  queue/                Publisher interface, amqp091 implementation
-  processor/            record → publish → mark, and the reasoning for that order
-  httpapi/              routes, webhook handler, probes
-  obs/                  slog setup
-test/
-  e2e/                  live-cluster suite (-tags=e2e)
-  testdata/             canned Alertmanager payloads
-```
-
 # File Explanations
 
 1. Entry point: `cmd/alertprocessor/main.go`: Initialize main resources (database connection, queue publisher connection, a process, an http service) and supporting resources (logger, Prometheus metrics).
@@ -134,7 +115,7 @@ test/
 
 #### rabbit mq:
 
-````
+```bash
 export ALERTPROCESSOR_AMQP_USERNAME=<>
 export ALERTPROCESSOR_AMQP_PASSWORD=<>
 
@@ -149,7 +130,42 @@ kubectl -n ckh port-forward svc/agent-rabbitmq 15672:15672
 kubectl -n ckh port-forward svc/agent-rabbitmq 5672:5672
 
 ```
+
+to test with curl:
+
+```bash
+curl -i -X POST http://localhost:8080/api/v1/alerts \
+  -H 'Content-Type: application/json' \
+  --data-binary @alertprocessor/test/testdata/firing-batch.json
+```
+
+### Build and push the Docker image to Docker Hub
+
+Run from the repository root with Docker running. Replace `your-dockerhub-username`
+with your Docker Hub username or organization, and create an `alertprocessor`
+repository there if needed.
+
+```bash
+cd alertprocessor
+docker login
+docker build -t xinyangxu/alertprocessor:latest .
+docker push xinyangxu/alertprocessor:latest
+```
+
+Before deploying, set `image` in
+[`ops/alertprocessor/alertprocessor.yaml`](../ops/alertprocessor/alertprocessor.yaml)
+to the exact image you pushed, for example
+`your-dockerhub-username/alertprocessor:dev`. The manifest uses
+`imagePullPolicy: Always`. For a private Docker Hub repository, configure an
+`imagePullSecrets` entry on the Deployment with registry credentials in the
+`ckh` namespace.
+
+After pushing a replacement image with the same tag, run `make restart` to
+restart the pods and pull the updated image.
+
 ### In the cluster
+
+Run from the `alertprocessor` directory after building and pushing the image above.
 
 ```bash
 # 1. Secrets. Copy the template, fill in your Supabase DSN, apply it.
@@ -157,8 +173,7 @@ cp ../ops/alertprocessor/secret.example.yaml ../ops/alertprocessor/secret.yaml
 $EDITOR ../ops/alertprocessor/secret.yaml
 kubectl apply -f ../ops/alertprocessor/secret.yaml
 
-# 2. Image into minikube, then the manifests.
-make load
+# 2. Apply the manifests after setting the Docker Hub image above.
 make deploy
 
 # 3. Point Alertmanager at the webhook.
@@ -166,7 +181,7 @@ make route
 
 # 4. Confirm the operator actually merged the route.
 make am-config     # look for the `alertprocessor` receiver, not just `"null"`
-````
+```
 
 `make help` lists the rest.
 
@@ -216,15 +231,15 @@ generated password inside a YAML string.
 
 ### HTTP
 
-| Variable             | Default          | Notes                                           |
-| -------------------- | ---------------- | ----------------------------------------------- |
-| `HTTP_ADDR`          | `:8080`          |                                                 |
-| `WEBHOOK_PATH`       | `/api/v1/alerts` | Must match the `url` in the AlertmanagerConfig  |
-| `MAX_BODY_BYTES`     | `8388608`        | 8 MiB. Bounds memory on a large batch           |
-| `HTTP_READ_TIMEOUT`  | `15s`            |                                                 |
-| `HTTP_WRITE_TIMEOUT` | `30s`            | Must exceed `AMQP_PUBLISH_TIMEOUT`              |
-| `HTTP_IDLE_TIMEOUT`  | `60s`            |                                                 |
-| `SHUTDOWN_TIMEOUT`   | `20s`            | In-flight webhooks are drained                  |
+| Variable             | Default          | Notes                                          |
+| -------------------- | ---------------- | ---------------------------------------------- |
+| `HTTP_ADDR`          | `:8080`          |                                                |
+| `WEBHOOK_PATH`       | `/api/v1/alerts` | Must match the `url` in the AlertmanagerConfig |
+| `MAX_BODY_BYTES`     | `8388608`        | 8 MiB. Bounds memory on a large batch          |
+| `HTTP_READ_TIMEOUT`  | `15s`            |                                                |
+| `HTTP_WRITE_TIMEOUT` | `30s`            | Must exceed the fixed 8s AMQP publish timeout             |
+| `HTTP_IDLE_TIMEOUT`  | `60s`            |                                                |
+| `SHUTDOWN_TIMEOUT`   | `20s`            | In-flight webhooks are drained                 |
 
 ### PostgreSQL
 
@@ -246,14 +261,14 @@ yourself.
 
 | Variable                                                     | Default        | Notes                                            |
 | ------------------------------------------------------------ | -------------- | ------------------------------------------------ |
-| `AMQP_URL`                                                   | —              | `amqp://user:pass@host:port/vhost`               |
-| `AMQP_HOST` / `_PORT` / `_USERNAME` / `_PASSWORD` / `_VHOST` | —              | Override parts of the URL                        |
-| `AMQP_EXCHANGE`                                              | `alerts`       | Topic exchange                                   |
-| `AMQP_QUEUE`                                                 | `agent.events` | Quorum queue                                     |
-| `AMQP_ROUTING_KEY_PREFIX`                                    | `alert`        | Keys are `<prefix>.<state>.<severity>`           |
-| `AMQP_DECLARE_TOPOLOGY`                                      | `true`         | Set false once `harness/` declares its own queue |
-| `AMQP_CONFIRM_TIMEOUT`                                       | `5s`           |                                                  |
-| `AMQP_PUBLISH_TIMEOUT`                                       | `8s`           | Must stay under `HTTP_WRITE_TIMEOUT`             |
+| `AMQP_HOST` / `_PORT` / `_USERNAME` / `_PASSWORD` | —              | Connection settings; host required, port defaults to 5672                        |
+
+The connection URL is built from these four settings using `amqp://` and the
+default virtual host `/`. Topology declaration is always enabled.
+The topic exchange is fixed to `alerts`, the quorum queue to `agent.events`,
+and the routing key prefix to `alert` (keys are `alert.<state>.<severity>`).
+The confirm, connect, and publish timeouts are fixed at 5s, 10s, and 8s,
+respectively. These settings cannot be overridden through environment variables.
 
 ### Logging
 
@@ -412,8 +427,7 @@ logs this explicitly rather than letting it pass.
 
 **`PRECONDITION_FAILED` on startup.** The queue exists with different arguments
 than the service declares — usually a classic queue where it wants a quorum
-queue. Delete the queue, or set `AMQP_DECLARE_TOPOLOGY=false` and let whoever owns
-it declare it.
+queue. The existing queue must match the durable quorum queue declaration.
 
 ---
 

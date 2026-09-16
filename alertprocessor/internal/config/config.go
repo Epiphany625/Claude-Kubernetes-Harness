@@ -115,23 +115,20 @@ func Load() (*Config, error) {
 			AutoMigrate:    envBool("DB_AUTO_MIGRATE", true, &errs),
 		},
 		AMQP: AMQPConfig{
-			URL:      env("AMQP_URL", ""),
+			URL:      "", // Derived from host, port, username, and password below.
 			Host:     env("AMQP_HOST", ""),
 			Port:     envInt("AMQP_PORT", 0, &errs),
 			Username: env("AMQP_USERNAME", ""),
 			Password: env("AMQP_PASSWORD", ""),
-			VHost:    env("AMQP_VHOST", "/"),
-			// Trimmed, because a name with surrounding whitespace is almost
-			// always a YAML quoting accident, and RabbitMQ would accept
-			// "agent.events " as a genuinely different queue from the one the
-			// consumer binds to.
-			Exchange:        strings.TrimSpace(env("AMQP_EXCHANGE", "alerts")),
-			Queue:           strings.TrimSpace(env("AMQP_QUEUE", "agent.events")),
-			RoutingPrefix:   strings.TrimSpace(env("AMQP_ROUTING_KEY_PREFIX", "alert")),
-			DeclareTopology: envBool("AMQP_DECLARE_TOPOLOGY", true, &errs),
-			ConfirmTimeout:  envDuration("AMQP_CONFIRM_TIMEOUT", 5*time.Second, &errs),
-			ConnectTimeout:  envDuration("AMQP_CONNECT_TIMEOUT", 10*time.Second, &errs),
-			PublishTimeout:  envDuration("AMQP_PUBLISH_TIMEOUT", 8*time.Second, &errs),
+			VHost:    "/",
+			// Topology names and timeouts are fixed service settings.
+			Exchange:        "alerts",
+			Queue:           "agent.events",
+			RoutingPrefix:   "alert",
+			DeclareTopology: true,
+			ConfirmTimeout:  5 * time.Second,
+			ConnectTimeout:  10 * time.Second,
+			PublishTimeout:  8 * time.Second,
 		},
 		Log: LogConfig{
 			Level:  strings.ToLower(env("LOG_LEVEL", "info")),
@@ -162,19 +159,12 @@ func Load() (*Config, error) {
 	if cfg.HTTP.MaxBodyBytes < 1024 {
 		fail("%sMAX_BODY_BYTES must be at least 1024", EnvPrefix)
 	}
-	if cfg.AMQP.Exchange == "" {
-		fail("%sAMQP_EXCHANGE must not be empty", EnvPrefix)
-	}
-	if cfg.AMQP.DeclareTopology && cfg.AMQP.Queue == "" {
-		fail("%sAMQP_QUEUE must be set when %sAMQP_DECLARE_TOPOLOGY is true",
-			EnvPrefix, EnvPrefix)
-	}
 	// The publish budget has to fit inside the write timeout, or the handler is
 	// still waiting for a confirm when the HTTP server has already given up on
 	// the response.
 	if cfg.AMQP.PublishTimeout >= cfg.HTTP.WriteTimeout {
-		fail("%sAMQP_PUBLISH_TIMEOUT (%s) must be less than %sHTTP_WRITE_TIMEOUT (%s)",
-			EnvPrefix, cfg.AMQP.PublishTimeout, EnvPrefix, cfg.HTTP.WriteTimeout)
+		fail("%sHTTP_WRITE_TIMEOUT (%s) must exceed the fixed AMQP publish timeout (%s)",
+			EnvPrefix, cfg.HTTP.WriteTimeout, cfg.AMQP.PublishTimeout)
 	}
 	if cfg.Log.Format != "json" && cfg.Log.Format != "text" {
 		fail("%sLOG_FORMAT: %q is not one of \"json\", \"text\"", EnvPrefix, cfg.Log.Format)
@@ -271,64 +261,23 @@ func (p PostgresConfig) resolveDSN() (string, error) {
 	return u.String(), nil
 }
 
-// resolveURL builds the AMQP URL the same way, so RabbitMQ credentials can come
-// straight from the cluster operator's Secret without anyone string-building a
-// URL in a manifest (and URL-escaping the password by hand).
+// resolveURL builds the AMQP URL from the discrete connection settings,
+// escaping credentials supplied by the cluster operator's Secret.
 func (a AMQPConfig) resolveURL() (string, error) {
-	if a.URL == "" && a.Host == "" {
-		return "", fmt.Errorf("set %sAMQP_URL, or %sAMQP_HOST and the other AMQP_* variables",
-			EnvPrefix, EnvPrefix)
+	if a.Host == "" {
+		return "", fmt.Errorf("%sAMQP_HOST must be set", EnvPrefix)
 	}
-
-	var u *url.URL
-	if a.URL != "" {
-		parsed, err := url.Parse(a.URL)
-		if err != nil {
-			return "", fmt.Errorf("%sAMQP_URL is not a valid URL: %w", EnvPrefix, err)
-		}
-		if parsed.Scheme != "amqp" && parsed.Scheme != "amqps" {
-			return "", fmt.Errorf("%sAMQP_URL scheme must be amqp:// or amqps://, got %q",
-				EnvPrefix, parsed.Scheme)
-		}
-		u = parsed
-	} else {
-		u = &url.URL{Scheme: "amqp"}
+	port := a.Port
+	if port == 0 {
+		port = 5672
 	}
-
-	user := u.User.Username()
-	pass, _ := u.User.Password()
+	u := &url.URL{
+		Scheme: "amqp",
+		Host:   a.Host + ":" + strconv.Itoa(port),
+	}
 	if a.Username != "" {
-		user = a.Username
+		u.User = url.UserPassword(a.Username, a.Password)
 	}
-	if a.Password != "" {
-		pass = a.Password
-	}
-	if user != "" {
-		// url.UserPassword escapes both halves. RabbitMQ's generated passwords
-		// routinely contain characters that are structural in a URL, which is
-		// the bug this whole function exists to prevent.
-		u.User = url.UserPassword(user, pass)
-	}
-
-	host, port := splitHostPort(u.Host)
-	if a.Host != "" {
-		host = a.Host
-	}
-	if a.Port != 0 {
-		port = strconv.Itoa(a.Port)
-	}
-	if host == "" {
-		return "", fmt.Errorf("%sAMQP_URL has no host and %sAMQP_HOST is unset", EnvPrefix, EnvPrefix)
-	}
-	if port == "" {
-		port = "5672"
-	}
-	u.Host = host + ":" + port
-
-	if a.VHost != "" && a.VHost != "/" {
-		u.Path = "/" + strings.TrimPrefix(a.VHost, "/")
-	}
-
 	return u.String(), nil
 }
 

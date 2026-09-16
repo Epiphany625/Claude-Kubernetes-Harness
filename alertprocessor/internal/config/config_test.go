@@ -22,7 +22,7 @@ func setenv(t *testing.T, vars map[string]string) {
 func minimal() map[string]string {
 	return map[string]string{
 		"POSTGRES_DSN": "postgres://user:pass@db.example.com:5432/postgres?sslmode=require",
-		"AMQP_URL":     "amqp://guest:guest@rabbit:5672/",
+		"AMQP_HOST":    "rabbit",
 	}
 }
 
@@ -72,7 +72,7 @@ func TestLoadReportsEveryProblemAtOnce(t *testing.T) {
 
 func TestMissingConnectionDetails(t *testing.T) {
 	t.Run("no postgres at all", func(t *testing.T) {
-		setenv(t, map[string]string{"AMQP_URL": "amqp://rabbit:5672/"})
+		setenv(t, map[string]string{"AMQP_HOST": "rabbit"})
 		_, err := config.Load()
 		if err == nil || !strings.Contains(err.Error(), "POSTGRES_DSN") {
 			t.Fatalf("expected a POSTGRES_DSN error, got %v", err)
@@ -82,8 +82,8 @@ func TestMissingConnectionDetails(t *testing.T) {
 	t.Run("no amqp at all", func(t *testing.T) {
 		setenv(t, map[string]string{"POSTGRES_DSN": "postgres://db:5432/postgres"})
 		_, err := config.Load()
-		if err == nil || !strings.Contains(err.Error(), "AMQP_URL") {
-			t.Fatalf("expected an AMQP_URL error, got %v", err)
+		if err == nil || !strings.Contains(err.Error(), "AMQP_HOST") {
+			t.Fatalf("expected an AMQP_HOST error, got %v", err)
 		}
 	})
 }
@@ -140,7 +140,7 @@ func TestPostgresDiscreteOverrides(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			vars := tc.vars
-			vars["AMQP_URL"] = "amqp://guest:guest@rabbit:5672/"
+			vars["AMQP_HOST"] = "rabbit"
 			setenv(t, vars)
 
 			cfg, err := config.Load()
@@ -208,17 +208,19 @@ func TestAMQPDiscreteOverrides(t *testing.T) {
 	}
 }
 
-func TestAMQPVHost(t *testing.T) {
+func TestAMQPFixedSettingsIgnoreEnvironment(t *testing.T) {
 	vars := minimal()
+	vars["AMQP_URL"] = "https://ignored:1234/custom"
 	vars["AMQP_VHOST"] = "harness"
+	vars["AMQP_DECLARE_TOPOLOGY"] = "false"
 	setenv(t, vars)
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !strings.HasSuffix(cfg.AMQP.URL, "/harness") {
-		t.Errorf("AMQP URL = %q, want it to end in /harness", cfg.AMQP.URL)
+	if cfg.AMQP.URL != "amqp://rabbit:5672" || cfg.AMQP.VHost != "/" || !cfg.AMQP.DeclareTopology {
+		t.Fatal("AMQP environment overrides changed fixed settings")
 	}
 }
 
@@ -239,21 +241,12 @@ func TestInvalidURLs(t *testing.T) {
 		}
 	})
 
-	t.Run("amqp wrong scheme", func(t *testing.T) {
-		vars := minimal()
-		vars["AMQP_URL"] = "http://rabbit:5672/"
-		setenv(t, vars)
-
-		if _, err := config.Load(); err == nil || !strings.Contains(err.Error(), "scheme") {
-			t.Fatalf("expected a scheme error, got %v", err)
-		}
-	})
 }
 
 func TestDurationAndNumberParsing(t *testing.T) {
 	t.Run("valid", func(t *testing.T) {
 		vars := minimal()
-		vars["AMQP_CONFIRM_TIMEOUT"] = "250ms"
+		vars["POSTGRES_QUERY_TIMEOUT"] = "250ms"
 		vars["POSTGRES_MAX_CONNS"] = "42"
 		setenv(t, vars)
 
@@ -261,8 +254,8 @@ func TestDurationAndNumberParsing(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Load: %v", err)
 		}
-		if cfg.AMQP.ConfirmTimeout != 250*time.Millisecond {
-			t.Errorf("ConfirmTimeout = %v", cfg.AMQP.ConfirmTimeout)
+		if cfg.Postgres.QueryTimeout != 250*time.Millisecond {
+			t.Errorf("QueryTimeout = %v", cfg.Postgres.QueryTimeout)
 		}
 		if cfg.Postgres.MaxConns != 42 {
 			t.Errorf("MaxConns = %d", cfg.Postgres.MaxConns)
@@ -272,7 +265,7 @@ func TestDurationAndNumberParsing(t *testing.T) {
 	t.Run("a bare number is not a duration", func(t *testing.T) {
 		vars := minimal()
 		// "5" is the natural typo for "5s" and means nothing to ParseDuration.
-		vars["AMQP_CONFIRM_TIMEOUT"] = "5"
+		vars["POSTGRES_QUERY_TIMEOUT"] = "5"
 		setenv(t, vars)
 
 		_, err := config.Load()
@@ -283,7 +276,7 @@ func TestDurationAndNumberParsing(t *testing.T) {
 
 	t.Run("negative duration", func(t *testing.T) {
 		vars := minimal()
-		vars["AMQP_CONFIRM_TIMEOUT"] = "-5s"
+		vars["POSTGRES_QUERY_TIMEOUT"] = "-5s"
 		setenv(t, vars)
 
 		if _, err := config.Load(); err == nil {
@@ -319,50 +312,14 @@ func TestDurationAndNumberParsing(t *testing.T) {
 func TestPublishTimeoutMustFitInsideWriteTimeout(t *testing.T) {
 	vars := minimal()
 	vars["HTTP_WRITE_TIMEOUT"] = "5s"
-	vars["AMQP_PUBLISH_TIMEOUT"] = "8s"
 	setenv(t, vars)
 
 	_, err := config.Load()
 	if err == nil {
 		t.Fatal("expected the publish timeout to be rejected for exceeding the write timeout")
 	}
-	if !strings.Contains(err.Error(), "PUBLISH_TIMEOUT") {
+	if !strings.Contains(err.Error(), "HTTP_WRITE_TIMEOUT") {
 		t.Errorf("error does not name the offending variable: %v", err)
-	}
-}
-
-func TestDeclareTopologyRequiresQueue(t *testing.T) {
-	vars := minimal()
-	vars["AMQP_DECLARE_TOPOLOGY"] = "true"
-	// Whitespace-only is what a YAML quoting accident produces. Accepting it
-	// would declare an exchange with nothing bound to it, and every publish
-	// would then come back unroutable.
-	vars["AMQP_QUEUE"] = "   "
-	setenv(t, vars)
-
-	_, err := config.Load()
-	if err == nil {
-		t.Fatal("expected a whitespace-only queue name to be rejected")
-	}
-	if !strings.Contains(err.Error(), "AMQP_QUEUE") {
-		t.Errorf("error does not name the offending variable: %v", err)
-	}
-}
-
-func TestTopologyNamesAreTrimmed(t *testing.T) {
-	vars := minimal()
-	vars["AMQP_EXCHANGE"] = "  alerts  "
-	vars["AMQP_QUEUE"] = " agent.events "
-	setenv(t, vars)
-
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	// RabbitMQ would treat "agent.events " as a different queue from the one the
-	// consumer binds to, and nothing would report the mismatch.
-	if cfg.AMQP.Exchange != "alerts" || cfg.AMQP.Queue != "agent.events" {
-		t.Errorf("names not trimmed: exchange=%q queue=%q", cfg.AMQP.Exchange, cfg.AMQP.Queue)
 	}
 }
 

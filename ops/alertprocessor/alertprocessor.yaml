@@ -19,7 +19,6 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: alertprocessor
-          # Replace with the Docker Hub image pushed using alertprocessor/README.md.
           image: xinyangxu/alertprocessor:latest
           imagePullPolicy: Always
           ports:

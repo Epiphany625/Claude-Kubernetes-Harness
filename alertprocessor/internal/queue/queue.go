@@ -12,9 +12,7 @@ import (
 // production implementation.
 type Publisher interface {
 	// Publish sends ev and returns only once the broker has confirmed it. A nil
-	// error means the message is durably on the queue -- the processor records
-	// published_at on the strength of it, so anything weaker than a confirm
-	// would make that column a lie.
+	// error means the message is durably on the queue
 	Publish(ctx context.Context, ev event.Event) error
 
 	// Ping reports whether the broker is reachable. /readyz only.

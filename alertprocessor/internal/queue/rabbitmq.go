@@ -17,23 +17,10 @@ import (
 
 // ErrUnroutable means the broker accepted the message and then handed it back
 // because no queue was bound to match its routing key.
-//
-// This is the failure worth naming. Without `mandatory` it is not an error at
-// all: the broker silently discards the message, the publish confirms, and the
-// service reports success for an event nobody will ever receive. It is also the
-// most likely failure before harness/ exists to declare its own queue.
 var ErrUnroutable = errors.New("message was returned by the broker as unroutable")
 
 // RabbitPublisher publishes events to a topic exchange, waiting for a broker
 // confirmation on every message.
-//
-// Publishes are serialized by a mutex. At this service's volume -- a handful of
-// messages per alert group, a few groups a minute -- the throughput cost is
-// irrelevant, and serializing is what makes the unroutable check below correct:
-// AMQP guarantees basic.return arrives before the basic.ack for the same
-// message, so with one publish in flight a return sitting in the channel after
-// the ack unambiguously belongs to the message just sent. Publishing
-// concurrently would require correlating returns to delivery tags by hand.
 type RabbitPublisher struct {
 	cfg config.AMQPConfig
 	log *slog.Logger
@@ -154,8 +141,7 @@ func (p *RabbitPublisher) reconnectLocked(ctx context.Context) error {
 //
 // Idempotent as long as nothing else declares the same objects with different
 // arguments; if something does, RabbitMQ answers PRECONDITION_FAILED and closes
-// the channel. That is the reason ALERTPROCESSOR_AMQP_DECLARE_TOPOLOGY exists:
-// once harness/ owns its queue, this service must stop declaring it.
+// the channel. Other services must use the same topology arguments.
 func (p *RabbitPublisher) declareLocked() error {
 	ch := p.channel
 
@@ -179,8 +165,8 @@ func (p *RabbitPublisher) declareLocked() error {
 	if _, err := ch.QueueDeclare(p.cfg.Queue,
 		true /*durable*/, false /*autoDelete*/, false /*exclusive*/, false /*noWait*/, queueArgs); err != nil {
 		return fmt.Errorf("declare queue %s (a PRECONDITION_FAILED here usually means the queue "+
-			"already exists with different arguments -- delete it, or set %sAMQP_DECLARE_TOPOLOGY=false): %w",
-			p.cfg.Queue, config.EnvPrefix, err)
+			"already exists with different arguments; expected a durable quorum queue): %w",
+			p.cfg.Queue, err)
 	}
 
 	// `alert.#` catches every routing key this service produces, including
@@ -205,8 +191,7 @@ func (p *RabbitPublisher) Publish(ctx context.Context, ev event.Event) error {
 		ContentType: "application/json",
 		// Persistent. A transient message is dropped when the broker restarts,
 		// and an event that reached the queue and then vanished is worse than
-		// one that never got there -- the row says published_at, so nothing
-		// will ever retry it.
+		// one that never got there
 		DeliveryMode: amqp.Persistent,
 		// message_id is the event_id, which is what makes redelivery safe for
 		// the consumer: it can deduplicate on this without parsing the body.
