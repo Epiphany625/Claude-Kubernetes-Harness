@@ -192,9 +192,12 @@ func TestAlertReachesTheEventTable(t *testing.T) {
 
 	amPort := portForward(t, monitoringNamespace, alertmanagerService, 9093)
 
-	// A unique alertname per run, so the assertion below cannot match a row left
-	// behind by an earlier run or by a real alert that happens to be firing.
-	alertName := "E2EPipelineProbe" + uuid.NewString()[:8]
+	// The route in ops/prometheus/values-overlay.yaml only matches
+	// alertname="AlertProcessorTestAlert", so the injected alert must use that
+	// name. A unique e2e_run label distinguishes this probe from the always-firing
+	// PrometheusRule and from other test runs.
+	alertName := "AlertProcessorTestAlert"
+	runID := uuid.NewString()[:8]
 	startsAt := time.Now().UTC().Truncate(time.Second)
 
 	postAlert(t, amPort, []apiAlert{{
@@ -203,6 +206,7 @@ func TestAlertReachesTheEventTable(t *testing.T) {
 			"namespace": namespace,
 			"pod":       "e2e-probe-0",
 			"severity":  "warning",
+			"e2e_run":   runID,
 			"origin":    "alertprocessor-e2e",
 		},
 		Annotations: map[string]string{
@@ -213,9 +217,9 @@ func TestAlertReachesTheEventTable(t *testing.T) {
 		GeneratorURL: "http://e2e.invalid/",
 	}})
 
-	// groupWait is 30s in ops/alerting/alertmanagerconfig.yaml, so nothing can
-	// arrive sooner than that however healthy the pipeline is.
-	t.Logf("injected %s; waiting for it to be grouped (groupWait 30s) and delivered", alertName)
+	// group_wait is 0s in ops/prometheus/values-overlay.yaml, so the alert
+	// should be delivered almost immediately after injection.
+	t.Logf("injected %s (e2e_run=%s); group_wait is 0s, expecting prompt delivery", alertName, runID)
 
 	var (
 		eventID     string
@@ -230,25 +234,22 @@ func TestAlertReachesTheEventTable(t *testing.T) {
 		err := pool.QueryRow(ctx, `
 			SELECT event_id::text, alert_id, status, alert_status, published_at
 			  FROM event
-			 WHERE alert_name = $1
+			 WHERE alert_name = $1 AND labels->>'e2e_run' = $2
 			 ORDER BY received_at DESC
-			 LIMIT 1`, alertName).
+			 LIMIT 1`, alertName, runID).
 			Scan(&eventID, &alertID, &status, &alertStatus, &publishedAt)
 		if err == nil {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no event row for %s within 2 minutes.\n\n"+
+			t.Fatalf("no event row for %s (e2e_run=%s) within 2 minutes.\n\n"+
 				"Work backwards through the chain:\n"+
-				"  1. Did Alertmanager route it? Read the generated config:\n"+
-				"     kubectl -n monitoring get secret "+
-				"alertmanager-monitoring-kube-prometheus-alertmanager-generated "+
-				"-o jsonpath='{.data.alertmanager\\.yaml}' | base64 -d\n"+
-				"     If the only receiver is \"null\", the patch or the "+
-				"AlertmanagerConfig did not take.\n"+
+				"  1. Did Alertmanager route it? Run: make am-config\n"+
+				"     The route in ops/prometheus/values-overlay.yaml must match\n"+
+				"     alertname=%q to the test-webhook receiver.\n"+
 				"  2. Did the webhook arrive? kubectl -n %s logs -l "+
 				"app.kubernetes.io/name=alertprocessor --tail=50\n"+
-				"  3. Last error: %v", alertName, namespace, err)
+				"  3. Last error: %v", alertName, runID, alertName, namespace, err)
 		}
 		time.Sleep(3 * time.Second)
 	}
@@ -281,8 +282,10 @@ func TestAlertReachesTheEventTable(t *testing.T) {
 	t.Cleanup(func() {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if _, err := pool.Exec(cleanupCtx, `DELETE FROM event WHERE alert_name = $1`, alertName); err != nil {
-			t.Logf("clean up probe rows for %s: %v", alertName, err)
+		if _, err := pool.Exec(cleanupCtx,
+			`DELETE FROM event WHERE alert_name = $1 AND labels->>'e2e_run' = $2`,
+			alertName, runID); err != nil {
+			t.Logf("clean up probe rows for %s (e2e_run=%s): %v", alertName, runID, err)
 		}
 	})
 }
@@ -388,31 +391,25 @@ func TestAlertmanagerRoutesToTheProcessor(t *testing.T) {
 
 	config := generatedAlertmanagerConfig(t)
 
-	// The operator names a merged receiver <namespace>/<config>/<receiver>, so a
-	// bare "alertprocessor" is not what appears in the file.
-	if !strings.Contains(config, "ckh/alertprocessor/alertprocessor") {
-		t.Fatalf("the generated Alertmanager config has no alertprocessor receiver.\n"+
-			"Apply ops/alerting/alertmanager-patch.yaml and ops/alerting/alertmanagerconfig.yaml,\n"+
-			"in that order.\nCurrent config:\n%s", config)
+	// The Helm values in ops/prometheus/values-overlay.yaml define a receiver
+	// named "test-webhook" that points at the alertprocessor Service.
+	if !strings.Contains(config, "test-webhook") {
+		t.Fatalf("the generated Alertmanager config has no test-webhook receiver.\n"+
+			"Re-apply the Helm values:\n"+
+			"  helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \\\n"+
+			"    --namespace monitoring -f ops/prometheus/values-overlay.yaml\n\n"+
+			"Current config:\n%s", config)
 	}
-	if !strings.Contains(config, "alertprocessor.ckh.svc.cluster.local:8080") {
-		t.Errorf("the receiver does not point at the alertprocessor Service.\n%s", config)
-	}
-
-	// The operator injects this when alertmanagerConfigMatcherStrategy is left at
-	// its default, and it silently limits the pipeline to alerts about ckh --
-	// which a smoke test using a ckh-labelled alert would not catch.
-	if strings.Contains(config, `namespace="ckh"`) || strings.Contains(config, "namespace = ckh") {
-		t.Errorf("the merged route carries an injected namespace matcher, so alerts " +
-			"from other namespaces will never reach the processor. Apply " +
-			"ops/alerting/alertmanager-patch.yaml (alertmanagerConfigMatcherStrategy: None).")
+	if !strings.Contains(config, "alertprocessor.ckh.svc:8080") {
+		t.Errorf("the test-webhook receiver does not point at the alertprocessor Service.\n"+
+			"Expected URL containing alertprocessor.ckh.svc:8080 in ops/prometheus/values-overlay.yaml.\n%s", config)
 	}
 
-	// Merged routes are prepended and forced to continue:true, so the chart's
-	// own `Watchdog -> "null"` route does not shield us. Without this matcher the
-	// event table fills with a deadman's switch that can never be resolved.
-	if !strings.Contains(config, "Watchdog|InfoInhibitor") {
-		t.Errorf("the merged route does not exclude the always-firing synthetic " +
-			"alerts. Check the `matchers` block in ops/alerting/alertmanagerconfig.yaml.")
+	// The route must match AlertProcessorTestAlert to the webhook receiver.
+	// Without this, injected alerts fall through to the "null" receiver silently.
+	if !strings.Contains(config, "AlertProcessorTestAlert") {
+		t.Errorf("the generated config has no route matching AlertProcessorTestAlert.\n"+
+			"Apply ops/prometheus/test-alert-rule.yaml and check the route matchers in\n"+
+			"ops/prometheus/values-overlay.yaml.\n%s", config)
 	}
 }
