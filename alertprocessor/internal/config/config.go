@@ -68,9 +68,8 @@ type AMQPConfig struct {
 
 	Exchange        string
 	Queue           string
-	RoutingPrefix   string
-	DeclareTopology bool
-	ConfirmTimeout  time.Duration
+	RoutingPrefix  string
+	ConfirmTimeout time.Duration
 	ConnectTimeout  time.Duration
 	// PublishTimeout bounds one publish attempt end to end. It must stay well
 	// under Alertmanager's webhook timeout or the sender gives up first and
@@ -124,9 +123,8 @@ func Load() (*Config, error) {
 			// Topology names and timeouts are fixed service settings.
 			Exchange:        "alerts",
 			Queue:           "agent.events",
-			RoutingPrefix:   "alert",
-			DeclareTopology: true,
-			ConfirmTimeout:  5 * time.Second,
+			RoutingPrefix:  "alert",
+			ConfirmTimeout: 5 * time.Second,
 			ConnectTimeout:  10 * time.Second,
 			PublishTimeout:  8 * time.Second,
 		},

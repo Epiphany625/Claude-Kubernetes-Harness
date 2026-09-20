@@ -123,17 +123,14 @@ func (p *RabbitPublisher) reconnectLocked(ctx context.Context) error {
 	p.channel = ch
 	p.returns = returns
 
-	if p.cfg.DeclareTopology {
-		if err := p.declareLocked(); err != nil {
-			_ = p.teardownLocked()
-			return err
-		}
+	if err := p.declareLocked(); err != nil {
+		_ = p.teardownLocked()
+		return err
 	}
 
 	p.log.Info("connected to rabbitmq",
 		"url", config.Redacted(p.cfg.URL),
-		"exchange", p.cfg.Exchange,
-		"declared_topology", p.cfg.DeclareTopology)
+		"exchange", p.cfg.Exchange)
 	return nil
 }
 

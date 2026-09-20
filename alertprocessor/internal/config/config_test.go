@@ -212,14 +212,13 @@ func TestAMQPFixedSettingsIgnoreEnvironment(t *testing.T) {
 	vars := minimal()
 	vars["AMQP_URL"] = "https://ignored:1234/custom"
 	vars["AMQP_VHOST"] = "harness"
-	vars["AMQP_DECLARE_TOPOLOGY"] = "false"
 	setenv(t, vars)
 
 	cfg, err := config.Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.AMQP.URL != "amqp://rabbit:5672" || cfg.AMQP.VHost != "/" || !cfg.AMQP.DeclareTopology {
+	if cfg.AMQP.URL != "amqp://rabbit:5672" || cfg.AMQP.VHost != "/" {
 		t.Fatal("AMQP environment overrides changed fixed settings")
 	}
 }

@@ -59,9 +59,8 @@ func baseConfig(url string) config.AMQPConfig {
 		URL:             url,
 		Exchange:        "alerts",
 		Queue:           "agent.events",
-		RoutingPrefix:   "alert",
-		DeclareTopology: true,
-		ConfirmTimeout:  10 * time.Second,
+		RoutingPrefix:  "alert",
+		ConfirmTimeout: 10 * time.Second,
 		ConnectTimeout:  15 * time.Second,
 		PublishTimeout:  20 * time.Second,
 	}
@@ -273,7 +272,7 @@ func TestPublishSucceedsAfterAnUnroutableOne(t *testing.T) {
 	strayPub, err := queue.Open(ctx, func() config.AMQPConfig {
 		c := baseConfig(url)
 		c.RoutingPrefix = "unbound"
-		c.DeclareTopology = false
+		c.Queue = "" // skip queue binding so "unbound.#" stays unroutable
 		return c
 	}(), quietLogger())
 	if err != nil {
