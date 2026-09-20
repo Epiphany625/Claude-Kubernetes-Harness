@@ -1,0 +1,79 @@
+{
+  "amqp": {
+    "host": "",
+    "port": 5672,
+    "username": "",
+    "password": "",
+    "vhost": "/",
+    "exchange": "alerts",
+    "queue": "agent.events",
+    "routingPrefix": "alert"
+  },
+  "mcpServers": {
+    "kubemcp": {
+      "type": "http",
+      "url": "http://127.0.0.1:8080/mcp",
+      "headers": {}
+    }
+  },
+  "orchestrator": {
+    "model": "sonnet",
+    "allowedTools": ["Agent", "Task", "mcp__kubemcp"],
+    "disallowedTools": ["Bash", "Write", "Edit", "NotebookEdit"],
+    "maxTurns": 30,
+    "effort": "high"
+  },
+  "agents": {
+    "investigator": {
+      "tools": [
+        "mcp__kubemcp__list_api_resources",
+        "mcp__kubemcp__get_cluster_info",
+        "mcp__kubemcp__list_resources",
+        "mcp__kubemcp__get_resource",
+        "mcp__kubemcp__describe_resource",
+        "mcp__kubemcp__get_pod_logs",
+        "mcp__kubemcp__list_events",
+        "mcp__kubemcp__get_top_metrics"
+      ],
+      "model": "sonnet",
+      "maxTurns": 20,
+      "effort": "high",
+      "mcpServers": ["kubemcp"]
+    },
+    "executor": {
+      "tools": [
+        "mcp__kubemcp__list_resources",
+        "mcp__kubemcp__get_resource",
+        "mcp__kubemcp__describe_resource",
+        "mcp__kubemcp__get_pod_logs",
+        "mcp__kubemcp__list_events",
+        "mcp__kubemcp__get_top_metrics",
+        "mcp__kubemcp__create_resource",
+        "mcp__kubemcp__apply_resource",
+        "mcp__kubemcp__patch_resource",
+        "mcp__kubemcp__scale_resource",
+        "mcp__kubemcp__rollout_restart",
+        "mcp__kubemcp__delete_resource",
+        "mcp__kubemcp__exec_in_pod"
+      ],
+      "model": "sonnet",
+      "maxTurns": 20,
+      "effort": "high",
+      "mcpServers": ["kubemcp"]
+    },
+    "verifier": {
+      "tools": [
+        "mcp__kubemcp__list_resources",
+        "mcp__kubemcp__get_resource",
+        "mcp__kubemcp__describe_resource",
+        "mcp__kubemcp__get_pod_logs",
+        "mcp__kubemcp__list_events",
+        "mcp__kubemcp__get_top_metrics"
+      ],
+      "model": "sonnet",
+      "maxTurns": 20,
+      "effort": "high",
+      "mcpServers": ["kubemcp"]
+    }
+  }
+}
