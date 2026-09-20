@@ -121,17 +121,9 @@ Three worth knowing about:
   no meaning anywhere in the path. Ask for a shell explicitly if you want one:
   `["sh", "-c", "ps aux | head"]`.
 
-### Deliberate non-goals
-
-`watch` and `port_forward` are not implemented. Both are long-lived and stateful,
-which fits badly in a request/response tool and worse behind a stateless,
-horizontally-scaled service. An agent can poll `list_resources` instead.
-
 ### Responses are shaped for a language model
 
-A raw Pod is 10–15k tokens, mostly `managedFields` and a
-`last-applied-configuration` annotation restating the whole spec. Left alone, a
-few list calls bury the caller's context. So:
+A raw Pod is 10–15k tokens, So:
 
 - `managedFields` and `last-applied-configuration` are always stripped.
 - `view="summary"` (the default) projects each kind down to the fields someone
@@ -186,23 +178,6 @@ either a comma-separated string or JSON, so Helm values work directly.
 | `KUBEMCP_EXEC_TIMEOUT_SECONDS`    | `60`              | Wall-clock ceiling on one exec.                                  |
 | `KUBEMCP_FIELD_MANAGER`           | `kubemcp`         | Field manager recorded for server-side apply.                    |
 | `KUBEMCP_LOG_LEVEL`               | `INFO`            | `DEBUG`…`CRITICAL`.                                              |
-
-### ⚠️ `KUBEMCP_ALLOWED_HOSTS` — the most likely cause of a failed first deploy
-
-The MCP streamable-HTTP transport rejects unrecognised `Host` headers as
-DNS-rebinding protection. In a cluster the Host header is the Service DNS name,
-so unless it is allowlisted **every request from the harness is rejected** — the
-pod looks healthy and serves nothing.
-
-```yaml
-env:
-  - name: KUBEMCP_ALLOWED_HOSTS
-    value: "kubemcp.ckh-system.svc.cluster.local:8080,kubemcp:8080"
-```
-
-Leaving it empty means "accept any Host", which is fine for local development;
-the server logs a warning at startup so it is never silently the case in
-production.
 
 ### Health probes
 
