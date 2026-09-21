@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 # basic configs
 CONFIG_FILE_PATH: Final = Path(__file__).with_name("config.json")
-ENV_PREFIX: Final = "harness"
+ENV_PREFIX: Final = "HARNESS"
 
 # name of the agents
 INVESTIGATOR: Final = "investigator"
@@ -27,7 +27,6 @@ class RabbitMQConfig:
     exchange: str
     queue: str
     routingPrefix: str
-    confirmTimeout: float
     connectTimeout: float
 
 def load_value(key: str, default_value: Any = None) -> Any:
@@ -90,7 +89,6 @@ def build_rabbitmq() -> RabbitMQConfig:
         exchange=load_value("amqp.exchange", "alerts"),
         queue=load_value("amqp.queue", "agent.events"),
         routingPrefix=load_value("amqp.routingPrefix", "alert"),
-        confirmTimeout=5.0,
         connectTimeout=10.0,
     )
 
