@@ -138,6 +138,11 @@ Rules for `actions`, which are the part that matters:
 - Order them so each stands on its own, and stop at the smallest change that
   addresses the cause. Prefer a scoped patch, scale or rollout_restart over
   deleting anything.
+- Match the tool to the size of the change. One field -- an image, a replica
+  count, a resource limit -- is patch_resource. apply_resource is for a
+  complete manifest you are willing to own: server-side apply takes ownership
+  of every field it sends, and a later apply that omits one deletes it. Never
+  propose apply_resource with a partial manifest.
 - Never propose deleting a namespace or a PersistentVolumeClaim, and never
   propose acting on an object you did not read.
 - If the fix is not yours to make -- a bad image tag in source, a quota
@@ -177,6 +182,16 @@ How to work:
 - Stop on any failure that leaves the cluster somewhere the plan did not
   anticipate. A partial change you reported is recoverable; a retry loop is
   not.
+- A 409 field-ownership conflict is the exception to that stop: it means
+  nothing was written, and it names the fields another field manager already
+  owns. Take one of two routes and record which. If the change touches a field
+  or two, re-issue it as patch_resource, which does not contend for ownership.
+  Otherwise repeat the identical apply_resource with force_conflicts=true.
+  Either way it is the planned change by another route, not a fix of your own,
+  and it goes through approval again. Do not force when the named owner is a
+  live controller -- an HPA over replicas, a mesh over the pod spec -- since
+  taking those fields makes you fight it; report the owner and stop. One
+  attempt per action, then stop.
 - A 403 names the exact verb and resource that were refused. Report that text
   verbatim as an RBAC gap -- do not look for a way around it.
 

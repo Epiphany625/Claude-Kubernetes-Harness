@@ -1,14 +1,22 @@
 
 import config.config as config
+from agent.agent import Harness
+import asyncio
 import mq.mq as mq
 
-def main() -> None:
-    # first, set up and start rabbitmq service
-    mqConfig = config.build_rabbitmq()
-    connection, channel = mq.start(mqConfig.url, mqConfig.connectTimeout)
+from functools import partial
+
+async def main() -> None:
+
+    harnessConfig = config.load_config()
+
+    harness = Harness(harnessConfig.agentOptionsConfig)
+
+    # set up and start rabbitmq service
+    connection, channel = mq.start(harnessConfig.rabbitMQConfig.url, harnessConfig.rabbitMQConfig.connectTimeout)
     channel.basic_consume(
-        queue=mqConfig.queue,
-        on_message_callback=mq.handleMessage,
+        queue=harnessConfig.rabbitMQConfig.queue,
+        on_message_callback=partial(mq.handleMessage, harness=harness),
         auto_ack=False
     )
     try:
@@ -18,7 +26,6 @@ def main() -> None:
     finally:
         connection.close()
 
-
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
 

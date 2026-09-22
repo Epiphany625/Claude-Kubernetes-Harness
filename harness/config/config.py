@@ -1,10 +1,8 @@
 import json
 import os
 from pathlib import Path
-from typing import Any, Final, Mapping
+from typing import *
 from urllib.parse import quote
-
-from claude_agent_sdk import AgentDefinition, ClaudeAgentOptions
 
 from . import prompts
 from dataclasses import dataclass
@@ -28,6 +26,28 @@ class RabbitMQConfig:
     queue: str
     routingPrefix: str
     connectTimeout: float
+
+@dataclass
+class SubagentConfig:
+    description: str
+    prompt: str
+    tools: List[str]
+    model: str
+    maxTurns: int
+    effort: str
+    mcpServers: List[str]
+@dataclass
+class AgentOptionsConfig:
+    model: str
+    system_prompt: str
+    tools: List[str]
+    allowed_tools: List[str]
+    disallowed_tools: List[str]
+    max_turns: int
+    effort: str
+    mcp_servers: Dict[Any, Any]
+    require_approval: bool
+    agents: Dict[str, SubagentConfig]
 
 def load_value(key: str, default_value: Any = None) -> Any:
     """Look up a dotted key in the environment, then JSON, then the default.
@@ -93,7 +113,7 @@ def build_rabbitmq() -> RabbitMQConfig:
     )
 
 
-def build_harness() -> ClaudeAgentOptions:
+def build_harness() -> AgentOptionsConfig:
     """Build the orchestrator and its three subagents from harness config."""
     agent_prompts = {
         INVESTIGATOR: (prompts._INVESTIGATOR_DESCRIPTION, prompts._INVESTIGATOR_PROMPT),
@@ -103,7 +123,7 @@ def build_harness() -> ClaudeAgentOptions:
     agents = {}
     for name in AGENT_NAMES:
         description, prompt = agent_prompts[name]
-        agents[name] = AgentDefinition(
+        agents[name] = SubagentConfig(
             description=description,
             prompt=prompt,
             tools=load_value(f"agents.{name}.tools", []),
@@ -113,9 +133,10 @@ def build_harness() -> ClaudeAgentOptions:
             mcpServers=load_value(f"agents.{name}.mcpServers", []),
         )
 
-    return ClaudeAgentOptions(
+    return AgentOptionsConfig(
         model=load_value("orchestrator.model", "opus"),
         system_prompt=prompts._ORCHESTRATOR_PROMPT,
+        tools=load_value("orchestrator.tools"),
         allowed_tools=load_value("orchestrator.allowedTools", ["Agent", "Task"]),
         disallowed_tools=load_value(
             "orchestrator.disallowedTools", ["Bash", "Write", "Edit", "NotebookEdit"]
@@ -123,5 +144,17 @@ def build_harness() -> ClaudeAgentOptions:
         max_turns=load_value("orchestrator.maxTurns", 30),
         effort=load_value("orchestrator.effort", "high"),
         mcp_servers=load_value("mcpServers", {}),
+        require_approval=load_value("policies.requireapproval", False),
         agents=agents,
+    )
+
+@dataclass
+class HarnessConfig:
+    rabbitMQConfig: RabbitMQConfig
+    agentOptionsConfig: AgentOptionsConfig
+
+def load_config() -> HarnessConfig:
+    return HarnessConfig(
+        rabbitMQConfig=build_rabbitmq(), 
+        agentOptionsConfig=build_harness(),
     )

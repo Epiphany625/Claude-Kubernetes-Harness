@@ -18,7 +18,8 @@
   },
   "orchestrator": {
     "model": "sonnet",
-    "allowedTools": ["Agent", "Task", "mcp__kubemcp"],
+    "tools": ["Agent", "Task", "mcp__kubemcp"],
+    "allowedTools": ["Agent", "Task"],
     "disallowedTools": ["Bash", "Write", "Edit", "NotebookEdit"],
     "maxTurns": 30,
     "effort": "high"
@@ -75,5 +76,8 @@
       "effort": "high",
       "mcpServers": ["kubemcp"]
     }
+  },
+  "policies": {
+    "requireapproval": true
   }
 }

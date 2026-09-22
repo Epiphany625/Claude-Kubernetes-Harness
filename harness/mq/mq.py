@@ -3,6 +3,7 @@ import pika
 from typing import Tuple
 from pika.adapters.blocking_connection import BlockingChannel
 from pika.spec import Basic, BasicProperties
+from agent.agent import Harness
 
 from .event import Event
 
@@ -14,7 +15,7 @@ def start(url: str, connectTimeout: float) -> Tuple[pika.BlockingConnection, Blo
     channel = connection.channel()
     return connection, channel
 
-def handleMessage(channel: BlockingChannel, method: Basic.Deliver, property: BasicProperties, body: bytes) -> None:
+async def handleMessage(channel: BlockingChannel, method: Basic.Deliver, property: BasicProperties, body: bytes, harness: Harness) -> None:
     try:
         event = Event.fromMessage(body)
     except ValueError as err:
@@ -29,6 +30,9 @@ def handleMessage(channel: BlockingChannel, method: Basic.Deliver, property: Bas
     redelivered = " (redelivered)" if method.redelivered else ""
     print(f"[mq] {method.routing_key}{redelivered}", flush=True)
     print(event.describe(), flush=True)
+
+    # start harness execution. 
+    await harness.start(event)
 
     channel.basic_ack(
         delivery_tag=method.delivery_tag
