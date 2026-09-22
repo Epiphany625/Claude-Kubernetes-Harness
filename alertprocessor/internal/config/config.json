@@ -1,0 +1,42 @@
+{
+  "http": {
+    "addr": ":8080",
+    "webhookPath": "/api/v1/alerts",
+    "maxBodyBytes": 8388608,
+    "readTimeout": "15s",
+    "writeTimeout": "30s",
+    "idleTimeout": "60s",
+    "shutdownTimeout": "20s"
+  },
+  "postgres": {
+    "dsn": "",
+    "host": "",
+    "port": 0,
+    "user": "",
+    "password": "",
+    "database": "",
+    "sslMode": "",
+    "maxConns": 10,
+    "minConns": 0,
+    "connectTimeout": "10s",
+    "queryTimeout": "5s",
+    "autoMigrate": true
+  },
+  "amqp": {
+    "host": "",
+    "port": 5672,
+    "username": "",
+    "password": "",
+    "vhost": "/",
+    "exchange": "alerts",
+    "queue": "agent.events",
+    "routingPrefix": "alert",
+    "confirmTimeout": "5s",
+    "connectTimeout": "10s",
+    "publishTimeout": "8s"
+  },
+  "log": {
+    "level": "info",
+    "format": "json"
+  }
+}

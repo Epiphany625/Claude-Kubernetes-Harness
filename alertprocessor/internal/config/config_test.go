@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -27,6 +28,7 @@ func minimal() map[string]string {
 }
 
 func TestLoadDefaults(t *testing.T) {
+	t.Chdir(t.TempDir())
 	setenv(t, minimal())
 
 	cfg, err := config.Load()
@@ -48,6 +50,100 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if !cfg.Postgres.AutoMigrate {
 		t.Error("DB_AUTO_MIGRATE should default to true so a fresh database works")
+	}
+}
+
+func TestLoadJSONConfig(t *testing.T) {
+	cases := []struct {
+		name     string
+		json     string
+		vars     map[string]string
+		wantAddr string
+	}{
+		{name: "missing file", wantAddr: ":8080"},
+		{name: "malformed JSON", json: `{`, wantAddr: ":8080"},
+		{name: "missing key", json: `{"http": {}}`, wantAddr: ":8080"},
+		{name: "non-object parent", json: `{"http": "localhost"}`, wantAddr: ":8080"},
+		{name: "null value", json: `{"http": {"addr": null}}`, wantAddr: ":8080"},
+		{name: "object value", json: `{"http": {"addr": {}}}`, wantAddr: ":8080"},
+		{name: "array value", json: `{"http": {"addr": []}}`, wantAddr: ":8080"},
+		{name: "nested lowercase keys", json: `{"http": {"addr": ":9090"}}`, wantAddr: ":9090"},
+		{name: "nested uppercase keys", json: `{"HTTP": {"ADDR": ":9091"}}`, wantAddr: ":9091"},
+		{name: "nested mixed case keys", json: `{"Http": {"Addr": ":9092"}}`, wantAddr: ":9092"},
+		{name: "environment overrides JSON", json: `{"http": {"addr": ":9090"}}`, vars: map[string]string{"HTTP_ADDR": ":9093"}, wantAddr: ":9093"},
+		{name: "empty environment uses JSON", json: `{"http": {"addr": ":9090"}}`, vars: map[string]string{"HTTP_ADDR": ""}, wantAddr: ":9090"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateJSONConfig(t)
+			setenv(t, minimal())
+			setenv(t, tc.vars)
+			if tc.json != "" {
+				writeJSONConfig(t, tc.json)
+			}
+			cfg, err := config.Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.HTTP.Addr != tc.wantAddr {
+				t.Errorf("HTTP.Addr = %q, want %q", cfg.HTTP.Addr, tc.wantAddr)
+			}
+		})
+	}
+}
+
+func TestLoadJSONConfigValueTypes(t *testing.T) {
+	isolateJSONConfig(t)
+	writeJSONConfig(t, `{
+		"postgres": {
+			"dsn": "postgres://user:pass@db.example.com:5432/postgres?sslmode=require",
+			"max": {"conns": 42},
+			"query": {"timeout": "250ms"}
+		},
+		"amqp": {"host": "rabbit", "port": 5673},
+		"max": {"body": {"bytes": 9007199254740993}},
+		"db": {"auto": {"migrate": false}}
+	}`)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Postgres.MaxConns != 42 {
+		t.Errorf("Postgres.MaxConns = %d, want 42", cfg.Postgres.MaxConns)
+	}
+	if cfg.Postgres.QueryTimeout != 250*time.Millisecond {
+		t.Errorf("Postgres.QueryTimeout = %v, want 250ms", cfg.Postgres.QueryTimeout)
+	}
+	if cfg.AMQP.URL != "amqp://rabbit:5673" {
+		t.Errorf("AMQP.URL = %q, want amqp://rabbit:5673", cfg.AMQP.URL)
+	}
+	if cfg.HTTP.MaxBodyBytes != 9007199254740993 {
+		t.Errorf("HTTP.MaxBodyBytes = %d, want 9007199254740993", cfg.HTTP.MaxBodyBytes)
+	}
+	if cfg.Postgres.AutoMigrate {
+		t.Error("Postgres.AutoMigrate = true, want false")
+	}
+}
+
+func isolateJSONConfig(t *testing.T) {
+	t.Helper()
+	t.Chdir(t.TempDir())
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.HasPrefix(name, config.EnvPrefix) {
+			// Setenv registers restoration before removing the variable.
+			t.Setenv(name, "")
+			if err := os.Unsetenv(name); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func writeJSONConfig(t *testing.T, contents string) {
+	t.Helper()
+	if err := os.WriteFile("config.json", []byte(contents), 0600); err != nil {
+		t.Fatal(err)
 	}
 }
 

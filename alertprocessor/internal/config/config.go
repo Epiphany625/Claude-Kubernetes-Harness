@@ -1,12 +1,7 @@
-// Package config reads the service's configuration from the environment.
-//
-// Environment only, no config file: every value either comes from a ConfigMap or
-// a Secret in Kubernetes, and a file would mean a third place for a value to
-// come from. Every variable is prefixed ALERTPROCESSOR_ so `envFrom` a whole
-// ConfigMap cannot collide with anything the runtime sets.
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -305,11 +300,48 @@ func splitHostPort(hostport string) (host, port string) {
 	return hostport, ""
 }
 
-func env(name, def string) string {
+func env(name, defaultValue string) string {
 	if v, ok := os.LookupEnv(EnvPrefix + name); ok && v != "" {
 		return v
+	} else {
+		data, err := os.ReadFile("config.json")
+		if err != nil {
+			return defaultValue
+		}
+		var value any
+		decoder := json.NewDecoder(strings.NewReader(string(data)))
+		decoder.UseNumber()
+		if err := decoder.Decode(&value); err != nil {
+			return defaultValue
+		}
+		for _, key := range strings.Split(name, "_") {
+			object, ok := value.(map[string]any)
+			if !ok {
+				return defaultValue
+			}
+			value, ok = object[key]
+			if !ok {
+				for candidate, entry := range object {
+					if strings.EqualFold(candidate, key) {
+						value, ok = entry, true
+						break
+					}
+				}
+			}
+			if !ok {
+				return defaultValue
+			}
+		}
+		switch value := value.(type) {
+		case string:
+			return value
+		case json.Number:
+			return value.String()
+		case bool:
+			return strconv.FormatBool(value)
+		}
 	}
-	return def
+	return defaultValue
 }
 
 func envInt(name string, def int, errs *[]error) int {
