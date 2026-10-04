@@ -8,6 +8,7 @@ from typing import Any
 
 import dataclasses
 from .approval_gate import ApprovalGate, Notifier
+import asyncio
 
 def preview(value: object) -> str:
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
@@ -18,8 +19,8 @@ def guard_hook():
     pass
 
 
-class Harness:
-    def __init__(self, config: config.AgentOptionsConfig):
+class AgentService:
+    def __init__(self, config: config.AgentOptionsConfig, taskQueue: asyncio.Queue[Event]):
         self.agentOptions = ClaudeAgentOptions(
             tools=config.tools,
             allowed_tools=config.allowed_tools, 
@@ -39,6 +40,9 @@ class Harness:
                 mcpServers=val.mcpServers
             ) for key, val in config.agents.items()}
         )
+        self.logger = config.logger
+        self.taskQueue = taskQueue
+        self.worker = config.worker # number of workers. 
 
         # tool approval check. 
         self.require_approval = config.require_approval
@@ -48,45 +52,54 @@ class Harness:
 
     # returns agent options with an extra canUseTool callback. 
     def withCanUseTool(self, event: Event) -> ClaudeAgentOptions:
-        if self.agentOptions.can_use_tool is None:
-            self.agentOptions = dataclasses.replace(
-                self.agentOptions,
-                can_use_tool=self.approvalGate.callback_for(event.describe(), self.require_approval),
-            )
-        return self.agentOptions
+        return dataclasses.replace(
+            self.agentOptions,
+            can_use_tool=self.approvalGate.callback_for(event.describe(), self.require_approval),
+        )
 
+    async def _start_agent(self):
+        while True:
+            event = await self.taskQueue.get()
+            try:
+                await self._handle_event(event)
+            except Exception:
+                # One bad event must not take down the TaskGroup: that cancels the
+                # RabbitMQ task, which aio_pika swallows, and the harness hangs silently.
+                self.logger.exception("[agent] failed handling event")
+            finally:
+                self.taskQueue.task_done()
 
-    async def start(self, event: Event) -> None:
+    async def _handle_event(self, event: Event):
         prompt = (
             "fix this error / issue sent through alertmanager:\n\n"
             f"{event.describe()}\n"
         )
         
         tool_names: dict[str, str] = {}
-        print(f"prompt: \n {prompt}")
+        self.logger.info(f"prompt: \n {prompt}")
 
         async for message in query(prompt=prompt, options=self.withCanUseTool(event)):
             if isinstance(message, (AssistantMessage, UserMessage)):
                 if isinstance(message, AssistantMessage) and message.error:
-                    print(f"[error] {message.error}", flush=True)
+                    self.logger.info(f"[error] {message.error}")
                 if isinstance(message.content, str):
                     continue
                 for block in message.content:
                     if isinstance(block, TextBlock) and isinstance(message, AssistantMessage):
                         label = "subagent" if message.parent_tool_use_id else "assistant"
-                        print(f"[{label}] {preview(block.text)}", flush=True)
+                        self.logger.info(f"[{label}] {preview(block.text)}")
                     elif isinstance(block, ToolUseBlock):
                         tool_names[block.id] = block.name
-                        print(f"[tool] {block.name}: {preview(block.input)}", flush=True)
+                        self.logger.info(f"[tool] {block.name}: {preview(block.input)}")
                     elif isinstance(block, ToolResultBlock):
                         name = tool_names.pop(block.tool_use_id, "tool")
                         status = "error" if block.is_error else "ok"
-                        print(f"[{status}] {name}: {preview(block.content)}", flush=True)
+                        self.logger.info(f"[{status}] {name}: {preview(block.content)}")
             elif isinstance(message, ResultMessage):
-                print("\nResponse:", flush=True)
-                print(message.result or "No response returned.", flush=True)
+                self.logger.info("\nResponse:")
+                self.logger.info(message.result or "No response returned.")
                 if message.errors:
-                    print("Errors: " + "; ".join(message.errors), flush=True)
+                    self.logger.info("Errors: " + "; ".join(message.errors))
                 status = "Error" if message.is_error else "Done"
                 summary = (
                     f"{status} | turns: {message.num_turns}"
@@ -94,4 +107,10 @@ class Harness:
                 )
                 if message.total_cost_usd is not None:
                     summary += f" | cost: ${message.total_cost_usd:.4f}"
-                print(summary, flush=True)
+                self.logger.info(summary)
+
+
+    async def start(self) -> None:
+        async with asyncio.TaskGroup() as tg:
+            for _ in range(self.worker):
+                tg.create_task(self._start_agent())

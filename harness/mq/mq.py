@@ -1,39 +1,55 @@
-import pika
 
-from typing import Tuple
-from pika.adapters.blocking_connection import BlockingChannel
-from pika.spec import Basic, BasicProperties
-from agent.agent import Harness
+import aio_pika
+from aio_pika.abc import AbstractIncomingMessage
+
+import asyncio
+from logging import Logger
+from config.config import RabbitMQConfig
 
 from .event import Event
 
 
-def start(url: str, connectTimeout: float) -> Tuple[pika.BlockingConnection, BlockingChannel]:
-    parameters = pika.URLParameters(url)
-    parameters.stack_timeout = connectTimeout
-    connection = pika.BlockingConnection(parameters)
-    channel = connection.channel()
-    return connection, channel
 
-async def handleMessage(channel: BlockingChannel, method: Basic.Deliver, property: BasicProperties, body: bytes, harness: Harness) -> None:
-    try:
-        event = Event.fromMessage(body)
-    except ValueError as err:
-        # A body that does not parse now will not parse on redelivery either,
-        # so requeueing it would spin forever. Drop it, loudly: the row is
-        # still in the producer's event table and can be replayed by hand.
-        print(f"[mq] dropping unparseable message {property.message_id}: {err}", flush=True)
-        print(f"[mq] body: {body!r}", flush=True)
-        channel.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
-        return
+class RabbitMQService:
+    def __init__(self, config: RabbitMQConfig, taskQueue: asyncio.Queue[Event], logger: Logger, prefetch: int = 10):
+        self.url = config.url
+        self.connectTimeout = config.connectTimeout
+        self.taskQueue = taskQueue
+        self.logger = logger
+        self.prefetch = prefetch 
+        self.queueName = config.queue
 
-    redelivered = " (redelivered)" if method.redelivered else ""
-    print(f"[mq] {method.routing_key}{redelivered}", flush=True)
-    print(event.describe(), flush=True)
+    async def start(self):
 
-    # start harness execution. 
-    await harness.start(event)
+        connection = await aio_pika.connect_robust(self.url, timeout=self.connectTimeout)
 
-    channel.basic_ack(
-        delivery_tag=method.delivery_tag
-    )
+        async with connection:
+            channel = await connection.channel()
+            await channel.set_qos(prefetch_count=self.prefetch)
+            mq_queue = await channel.get_queue(self.queueName)
+            self.logger.info("[mq] consuming from %s", self.queueName)
+            async with mq_queue.iterator() as messages:
+                async for message in messages:
+                    await self.handleMessage(message)
+
+    async def handleMessage(self, message: AbstractIncomingMessage) -> None:
+        try:
+            event = Event.fromMessage(message.body)
+        except ValueError as err:
+            # A body that does not parse now will not parse on redelivery either,
+            # so requeueing it would spin forever. Drop it, loudly: the row is
+            # still in the producer's event table and can be replayed by hand.
+            self.logger.warning("[mq] dropping unparseable message %s: %s", message.message_id, err)
+            self.logger.warning("[mq] body: %r", message.body)
+            await message.nack(requeue=False)
+            return
+        
+        redelivered = " (redelivered)" if message.redelivered else ""
+        self.logger.info("[mq] %s%s", message.routing_key, redelivered)
+        self.logger.info(event.describe())
+ 
+        # Waits here if the asyncio.Queue is full (backpressure). While we wait,
+        # this message stays unacked, so RabbitMQ stops sending after `prefetch`.
+        await self.taskQueue.put(event)
+ 
+        await message.ack()

@@ -7,6 +7,9 @@ from urllib.parse import quote
 from . import prompts
 from dataclasses import dataclass
 
+import logging
+from logging import Logger
+
 # basic configs
 CONFIG_FILE_PATH: Final = Path(__file__).with_name("config.json")
 ENV_PREFIX: Final = "HARNESS"
@@ -26,6 +29,7 @@ class RabbitMQConfig:
     queue: str
     routingPrefix: str
     connectTimeout: float
+    logger: Logger
 
 @dataclass
 class SubagentConfig:
@@ -48,6 +52,8 @@ class AgentOptionsConfig:
     mcp_servers: Dict[Any, Any]
     require_approval: bool
     agents: Dict[str, SubagentConfig]
+    worker: int
+    logger: Logger
 
 def load_value(key: str, default_value: Any = None) -> Any:
     """Look up a dotted key in the environment, then JSON, then the default.
@@ -84,7 +90,7 @@ def load_value(key: str, default_value: Any = None) -> Any:
 
     return default_value
 
-def build_rabbitmq() -> RabbitMQConfig:
+def build_rabbitmq(logger: Logger) -> RabbitMQConfig:
     """Build RabbitMQ settings with an escaped AMQP URL and fixed timeouts."""
     host = load_value("amqp.host", "")
     if not isinstance(host, str) or not host.strip():
@@ -110,10 +116,11 @@ def build_rabbitmq() -> RabbitMQConfig:
         queue=load_value("amqp.queue", "agent.events"),
         routingPrefix=load_value("amqp.routingPrefix", "alert"),
         connectTimeout=10.0,
+        logger=logger
     )
 
 
-def build_harness() -> AgentOptionsConfig:
+def build_harness(logger: Logger) -> AgentOptionsConfig:
     """Build the orchestrator and its three subagents from harness config."""
     agent_prompts = {
         INVESTIGATOR: (prompts._INVESTIGATOR_DESCRIPTION, prompts._INVESTIGATOR_PROMPT),
@@ -133,6 +140,10 @@ def build_harness() -> AgentOptionsConfig:
             mcpServers=load_value(f"agents.{name}.mcpServers", []),
         )
 
+    worker = load_value("orchestrator.worker", 1)
+    if isinstance(worker, bool) or not isinstance(worker, int) or worker < 1:
+        raise ValueError("orchestrator.worker must be a positive integer")
+
     return AgentOptionsConfig(
         model=load_value("orchestrator.model", "opus"),
         system_prompt=prompts._ORCHESTRATOR_PROMPT,
@@ -146,6 +157,8 @@ def build_harness() -> AgentOptionsConfig:
         mcp_servers=load_value("mcpServers", {}),
         require_approval=load_value("policies.requireapproval", False),
         agents=agents,
+        worker=worker,
+        logger=logger
     )
 
 @dataclass
@@ -154,7 +167,11 @@ class HarnessConfig:
     agentOptionsConfig: AgentOptionsConfig
 
 def load_config() -> HarnessConfig:
+
+    agentLogger = logging.getLogger("agentService")
+    rabbitLogger = logging.getLogger("rabbitmqService")
+
     return HarnessConfig(
-        rabbitMQConfig=build_rabbitmq(), 
-        agentOptionsConfig=build_harness(),
+        rabbitMQConfig=build_rabbitmq(rabbitLogger), 
+        agentOptionsConfig=build_harness(agentLogger),
     )

@@ -1,0 +1,40 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ckh-test-pod-failure-alerts
+  namespace: monitoring
+  labels:
+    release: monitoring
+spec:
+  groups:
+    - name: ckh-test-pod-alerts
+      rules:
+        # Container is repeatedly crashing and restarting
+        - alert: PodCrashLoopBackOff
+          expr: |
+            kube_pod_container_status_waiting_reason{
+              namespace="ckh-test",
+              reason="CrashLoopBackOff"
+            } == 1
+          for: 1m
+          labels:
+            severity: warning
+            namespace: ckh-test
+          annotations:
+            summary: "Pod {{ $labels.pod }} is crash looping"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is in CrashLoopBackOff."
+
+        # Container cannot start because Kubernetes cannot pull the image
+        - alert: PodImagePullError
+          expr: |
+            kube_pod_container_status_waiting_reason{
+              namespace="ckh-test",
+              reason=~"ErrImagePull|ImagePullBackOff"
+            } == 1
+          for: 1m
+          labels:
+            severity: warning
+            namespace: ckh-test
+          annotations:
+            summary: "Pod {{ $labels.pod }} has an image pull error"
+            description: "Container {{ $labels.container }} in pod {{ $labels.pod }} in namespace {{ $labels.namespace }} cannot pull its container image. Reason: {{ $labels.reason }}."

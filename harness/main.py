@@ -1,31 +1,30 @@
 
 import config.config as config
-from agent.agent import Harness
 import asyncio
 import mq.mq as mq
 
+# TODO. why can't my editor find this import? 
+from harness.harness import Harness
+
 from functools import partial
+
+import logging
 
 async def main() -> None:
 
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s.%(msecs)03d  %(name)-18s  %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    # this config also configures logging settings. 
     harnessConfig = config.load_config()
 
-    harness = Harness(harnessConfig.agentOptionsConfig)
+    harness = Harness(harnessConfig)
 
-    # set up and start rabbitmq service
-    connection, channel = mq.start(harnessConfig.rabbitMQConfig.url, harnessConfig.rabbitMQConfig.connectTimeout)
-    channel.basic_consume(
-        queue=harnessConfig.rabbitMQConfig.queue,
-        on_message_callback=partial(mq.handleMessage, harness=harness),
-        auto_ack=False
-    )
-    try:
-        channel.start_consuming()
-    except KeyboardInterrupt:
-        channel.stop_consuming()
-    finally:
-        connection.close()
+    await harness.start() # start harness service. 
+
 
 if __name__ == "__main__":
     asyncio.run(main())
-
