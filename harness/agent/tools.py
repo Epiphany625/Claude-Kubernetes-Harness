@@ -6,7 +6,7 @@ KUBEMCP_READ_TOOLS: Final = set(
         "mcp__kubemcp__get_pod_logs",
         "mcp__kubemcp__list_events",
         "mcp__kubemcp__get_top_metrics",
-        "list_api_resources", 
-        "get_cluster_info"
+        "mcp__kubemcp__list_api_resources", 
+        "mcp__kubemcp__get_cluster_info"
         ]
 )
