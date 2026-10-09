@@ -10,3 +10,5 @@ KUBEMCP_READ_TOOLS: Final = set(
         "mcp__kubemcp__get_cluster_info"
         ]
 )
+
+KUBEMCP_NO_TOOLS: Final = set([])
