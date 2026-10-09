@@ -1,22 +1,19 @@
-from claude_agent_sdk import ClaudeAgentOptions, query, ToolPermissionContext, AssistantMessage, UserMessage, TextBlock, ResultMessage, PermissionResultAllow, ToolUseBlock, ToolResultBlock, AgentDefinition, HookMatcher
-from mq.event import AlertState, Event, Status
+from claude_agent_sdk import ClaudeAgentOptions, query, AssistantMessage, UserMessage, TextBlock, ResultMessage, ToolUseBlock, ToolResultBlock, AgentDefinition, HookMatcher
+from mq.event import Event
 from textwrap import shorten
 import config.config as config
 import json
 
 from typing import Any
 
-import dataclasses
-from .approval_gate import ApprovalGate, Notifier
 import asyncio
+import dataclasses
+from .tools import *
+from .hooks import *
 
 def preview(value: object) -> str:
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
     return shorten(text, width=240, placeholder=" …")
-
-# hook that prevents kubectl writes until a human-in-the-loop approves. 
-def guard_hook():
-    pass
 
 
 class AgentService:
@@ -38,26 +35,26 @@ class AgentService:
                 maxTurns=val.maxTurns, 
                 effort=val.effort, 
                 mcpServers=val.mcpServers
-            ) for key, val in config.agents.items()}
+            ) for key, val in config.agents.items()},
+            # defer kubemcp writes until a human approves them.
+            hooks={
+                "PreToolUse": [HookMatcher(matcher=KUBEMCP_MATCHER, hooks=[kubemcp_tool_use_hook])]
+            } if config.require_approval else None,
         )
         self.logger = config.logger
         self.taskQueue = taskQueue
-        self.worker = config.worker # number of workers. 
-
-        # tool approval check. 
-        self.require_approval = config.require_approval
-        notifier = Notifier()
-        self.approvalGate = ApprovalGate(notifier, 15 * 60)
-        notifier.on_decision = self.approvalGate.resolve
-
-    # returns agent options with an extra canUseTool callback. 
-    def withCanUseTool(self, event: Event) -> ClaudeAgentOptions:
-        return dataclasses.replace(
-            self.agentOptions,
-            can_use_tool=self.approvalGate.callback_for(event.describe(), self.require_approval),
-        )
+        self.worker = config.worker # number of workers.
+    
+    async def _handle_sanity_run(self):
+        async for message in query(prompt="Check errors in default namespace, using kubemcp tools. ", options=self.agentOptions):
+            self._print_message(message)
+            self._handle_message(message)
 
     async def _start_agent(self):
+        if self.sanityRun:
+            await self._handle_sanity_run()
+            return 
+    
         while True:
             event = await self.taskQueue.get()
             try:
@@ -68,6 +65,12 @@ class AgentService:
                 self.logger.exception("[agent] failed handling event")
             finally:
                 self.taskQueue.task_done()
+    
+    def _handle_message(self, message: Any):
+        # a deferred tool call ends the run and is carried on the result message.
+        if isinstance(message, ResultMessage) and message.deferred_tool_use:
+            deferred = message.deferred_tool_use
+            print(f"defer tool use called: session: {message.session_id} tool: {deferred.name} input: {preview(deferred.input)}")
 
     async def _handle_event(self, event: Event):
         prompt = (
@@ -75,42 +78,38 @@ class AgentService:
             f"{event.describe()}\n"
         )
         
-        tool_names: dict[str, str] = {}
         self.logger.info(f"prompt: \n {prompt}")
+        
+        # if previous session exists, use previous session.
+        options = self.agentOptions
+        if event.sessionID:
+            self.logger.info("resuming from a previous message. ")
+            options = dataclasses.replace(options, resume=event.sessionID)
 
-        async for message in query(prompt=prompt, options=self.withCanUseTool(event)):
-            if isinstance(message, (AssistantMessage, UserMessage)):
-                if isinstance(message, AssistantMessage) and message.error:
-                    self.logger.info(f"[error] {message.error}")
-                if isinstance(message.content, str):
-                    continue
-                for block in message.content:
-                    if isinstance(block, TextBlock) and isinstance(message, AssistantMessage):
-                        label = "subagent" if message.parent_tool_use_id else "assistant"
-                        self.logger.info(f"[{label}] {preview(block.text)}")
-                    elif isinstance(block, ToolUseBlock):
-                        tool_names[block.id] = block.name
-                        self.logger.info(f"[tool] {block.name}: {preview(block.input)}")
-                    elif isinstance(block, ToolResultBlock):
-                        name = tool_names.pop(block.tool_use_id, "tool")
-                        status = "error" if block.is_error else "ok"
-                        self.logger.info(f"[{status}] {name}: {preview(block.content)}")
-            elif isinstance(message, ResultMessage):
-                self.logger.info("\nResponse:")
-                self.logger.info(message.result or "No response returned.")
-                if message.errors:
-                    self.logger.info("Errors: " + "; ".join(message.errors))
-                status = "Error" if message.is_error else "Done"
-                summary = (
-                    f"{status} | turns: {message.num_turns}"
-                    f" | time: {message.duration_ms / 1000:.1f}s"
-                )
-                if message.total_cost_usd is not None:
-                    summary += f" | cost: ${message.total_cost_usd:.4f}"
-                self.logger.info(summary)
+        async for message in query(prompt=prompt, options=options):
+            self._print_message(message)
+            self._handle_message(message)
+
+    def _print_message(self, message: Any) -> None:
+        if isinstance(message, (AssistantMessage, UserMessage)):
+            if isinstance(message.content, str):
+                return
+            for block in message.content:
+                if isinstance(block, TextBlock) and isinstance(message, AssistantMessage):
+                    label = "subagent" if message.parent_tool_use_id else "assistant"
+                    self.logger.info(f"[{label}] {preview(block.text)}")
+                elif isinstance(block, ToolUseBlock):
+                    self.logger.info(f"[tool] {block.name}: {preview(block.input)}")
+                elif isinstance(block, ToolResultBlock):
+                    status = "error" if block.is_error else "ok"
+                    self.logger.info(f"[{status}] {preview(block.content)}")
+        elif isinstance(message, ResultMessage):
+            status = "Error" if message.is_error else "Done"
+            self.logger.info(f"[result] {status} | turns: {message.num_turns} | {preview(message.result or 'No response returned.')}")
 
 
-    async def start(self) -> None:
+    async def start(self, sanityRun: bool = False) -> None:
+        self.sanityRun = sanityRun
         async with asyncio.TaskGroup() as tg:
             for _ in range(self.worker):
                 tg.create_task(self._start_agent())

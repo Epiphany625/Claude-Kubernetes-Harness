@@ -3,7 +3,6 @@ import config.config as config
 import asyncio
 import mq.mq as mq
 
-# TODO. why can't my editor find this import? 
 from harness.harness import Harness
 
 from functools import partial
@@ -21,7 +20,7 @@ async def main() -> None:
     # this config also configures logging settings. 
     harnessConfig = config.load_config()
 
-    harness = Harness(harnessConfig)
+    harness = Harness(harnessConfig, agentSanityRun = True)
 
     await harness.start() # start harness service. 
 

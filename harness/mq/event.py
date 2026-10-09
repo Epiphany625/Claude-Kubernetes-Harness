@@ -87,6 +87,13 @@ class Event:
 
     eventID: str = ""
     alertID: str = ""
+    
+    # very important: when a human approves the request, 
+    # agent recovers previous session based on this session id. 
+    # if this event is stringified from rabbit mq msg, then sessionID would be "" because
+    # no agent has run yet. 
+    sessionID: str = "" 
+    
     status: Status | str = ""
     alertState: AlertState | str = ""
 

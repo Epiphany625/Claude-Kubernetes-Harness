@@ -150,7 +150,7 @@ def build_harness(logger: Logger) -> AgentOptionsConfig:
         tools=load_value("orchestrator.tools"),
         allowed_tools=load_value("orchestrator.allowedTools", ["Agent", "Task"]),
         disallowed_tools=load_value(
-            "orchestrator.disallowedTools", ["Bash", "Write", "Edit", "NotebookEdit"]
+            "orchestrator.disallowedTools", ["Bash", "Write", "Edit", "NotebookEdit", "AskUserQuestion"]
         ),
         max_turns=load_value("orchestrator.maxTurns", 30),
         effort=load_value("orchestrator.effort", "high"),
