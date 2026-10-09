@@ -11,15 +11,18 @@ from .event import Event
 
 
 class RabbitMQService:
-    def __init__(self, config: RabbitMQConfig, taskQueue: asyncio.Queue[Event], logger: Logger, prefetch: int = 10):
+    def __init__(self, config: RabbitMQConfig, taskQueue: asyncio.Queue[Event], logger: Logger, prefetch: int = 10, sanity_check: bool = False):
         self.url = config.url
         self.connectTimeout = config.connectTimeout
         self.taskQueue = taskQueue
         self.logger = logger
         self.prefetch = prefetch 
         self.queueName = config.queue
+        self.sanity_check = sanity_check
 
     async def start(self):
+        if self.sanity_check:
+            return
 
         connection = await aio_pika.connect_robust(self.url, timeout=self.connectTimeout)
 

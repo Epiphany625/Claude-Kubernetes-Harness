@@ -20,8 +20,8 @@ async def main() -> None:
 
     # this config also configures logging settings. 
     harnessConfig = config.load_config()
-
-    harness = Harness(harnessConfig)
+    sanity_check = True
+    harness = Harness(harnessConfig, sanity_check)
 
     await harness.start() # start harness service. 
 

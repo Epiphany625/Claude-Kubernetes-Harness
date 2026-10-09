@@ -9,7 +9,7 @@ import sys
 
 class Harness:
     # TODO: make the logger variable typed. 
-    def __init__(self, harnessConfig: HarnessConfig):
+    def __init__(self, harnessConfig: HarnessConfig, sanity_check: bool = False):
         # a task queue for agentService to consume and rabbitmq service to produce. 
         self.taskQueue = asyncio.Queue[Event](maxsize=100) 
 
@@ -17,14 +17,13 @@ class Harness:
         rabbitMQConfig = harnessConfig.rabbitMQConfig
 
         # initialize two services
-        self.rabbitmqService = RabbitMQService(rabbitMQConfig, self.taskQueue, rabbitMQConfig.logger)
-        self.agentService = AgentService(agentOptionsConfig, self.taskQueue)
+        self.rabbitmqService = RabbitMQService(rabbitMQConfig, self.taskQueue, rabbitMQConfig.logger, sanity_check=sanity_check)
+        self.agentService = AgentService(agentOptionsConfig, self.taskQueue, sanity_check)
 
     async def start(self):
         if self.rabbitmqService is None or self.agentService is None:
             # TODO. exit on error. 
             sys.exit(1)
-        
         async with asyncio.TaskGroup() as tg:
             tg.create_task(self.rabbitmqService.start())
             tg.create_task(self.agentService.start())
