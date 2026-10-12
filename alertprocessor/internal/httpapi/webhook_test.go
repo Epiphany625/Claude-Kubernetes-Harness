@@ -18,6 +18,7 @@ import (
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/config"
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/event"
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/httpapi"
+	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/humanapproval"
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/processor"
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/store"
 )
@@ -31,6 +32,11 @@ type fakeStore struct {
 	recordFn func(event.Event) (store.RecordResult, error)
 	recorded []event.Event
 	pingErr  error
+
+	stored     map[string]event.Event
+	getErr     error
+	approveErr error
+	approved   []string
 }
 
 func (f *fakeStore) RecordEvent(_ context.Context, ev event.Event) (store.RecordResult, error) {
@@ -45,6 +51,26 @@ func (f *fakeStore) RecordEvent(_ context.Context, ev event.Event) (store.Record
 
 func (f *fakeStore) MarkPublished(context.Context, string) error { return nil }
 func (f *fakeStore) Ping(context.Context) error                  { return f.pingErr }
+
+func (f *fakeStore) GetEvent(_ context.Context, id string) (event.Event, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.getErr != nil {
+		return event.Event{}, false, f.getErr
+	}
+	ev, ok := f.stored[id]
+	return ev, ok, nil
+}
+
+func (f *fakeStore) ApproveTool(_ context.Context, eventID, sessionID, tool string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.approveErr != nil {
+		return f.approveErr
+	}
+	f.approved = append(f.approved, eventID+"/"+sessionID+"/"+tool)
+	return nil
+}
 
 func (f *fakeStore) events() []event.Event {
 	f.mu.Lock()
@@ -97,13 +123,14 @@ func newHarness(t *testing.T) *harness {
 	cfg := config.HTTPConfig{
 		Addr:         ":0",
 		WebhookPath:  "/api/v1/alerts",
+		ApprovalPath: "/api/v1/approvals",
 		MaxBodyBytes: 1 << 20,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  30 * time.Second,
 	}
 
-	srv := httpapi.New(cfg, processor.New(st, pub, log), map[string]httpapi.Pinger{
+	srv := httpapi.New(cfg, processor.New(st, pub, log), humanapproval.NewApprover(st, pub, log), map[string]httpapi.Pinger{
 		"postgres": st,
 		"rabbitmq": pub,
 	}, log)

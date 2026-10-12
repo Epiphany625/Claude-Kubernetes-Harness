@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS event (
     -- same label set. Many events share one alert_id over an alert's life.
     alert_id      TEXT        NOT NULL,
 
+    session_id UUID, -- claude conversation session id related to this event. 
+
     -- What the harness has done about this event. This service only ever writes
     -- 'waiting'; the rest of the vocabulary belongs to harness/ and is declared
     -- here so there is one definition of it.

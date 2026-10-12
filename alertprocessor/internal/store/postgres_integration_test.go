@@ -16,6 +16,7 @@ package store_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"testing"
@@ -404,5 +405,63 @@ func TestEmptyLabelsStoreAsEmptyObject(t *testing.T) {
 	}
 	if len(got.Labels) != 0 || got.Labels == nil {
 		t.Errorf("labels = %#v, want an empty non-nil map", got.Labels)
+	}
+}
+
+func TestApproveTool(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+
+	ev := sampleEvent("fp-approve", event.AlertFiring, time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC))
+	if _, err := s.RecordEvent(ctx, ev); err != nil {
+		t.Fatalf("RecordEvent: %v", err)
+	}
+	other := sampleEvent("fp-approve-other", event.AlertFiring, ev.StartsAt)
+	if _, err := s.RecordEvent(ctx, other); err != nil {
+		t.Fatalf("RecordEvent: %v", err)
+	}
+	session := uuid.NewString()
+
+	for _, tool := range []string{"scale_deployment", "scale_deployment", "patch_resource"} {
+		if err := s.ApproveTool(ctx, ev.EventID, session, tool); err != nil {
+			t.Fatalf("ApproveTool(%s): %v", tool, err)
+		}
+	}
+
+	var tools []string
+	if err := s.Pool().QueryRow(ctx,
+		`SELECT approved_tools FROM approval WHERE session_id = $1`, session).Scan(&tools); err != nil {
+		t.Fatalf("read approval: %v", err)
+	}
+	if len(tools) != 2 || tools[0] != "scale_deployment" || tools[1] != "patch_resource" {
+		t.Errorf("approved_tools = %v, want [scale_deployment patch_resource]", tools)
+	}
+
+	if err := s.ApproveTool(ctx, other.EventID, session, "scale_deployment"); !errors.Is(err, store.ErrApprovalConflict) {
+		t.Errorf("ApproveTool for another event's session: err = %v, want ErrApprovalConflict", err)
+	}
+}
+
+func TestGetEventReadsSessionID(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+
+	ev := sampleEvent("fp-session", event.AlertFiring, time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC))
+	if _, err := s.RecordEvent(ctx, ev); err != nil {
+		t.Fatalf("RecordEvent: %v", err)
+	}
+
+	got, _, err := s.GetEvent(ctx, ev.EventID)
+	if err != nil || got.SessionID != "" {
+		t.Fatalf("GetEvent before session: session=%q err=%v", got.SessionID, err)
+	}
+
+	session := uuid.NewString()
+	if _, err := s.Pool().Exec(ctx, `UPDATE event SET session_id = $1 WHERE event_id = $2`, session, ev.EventID); err != nil {
+		t.Fatalf("set session_id: %v", err)
+	}
+	got, _, err = s.GetEvent(ctx, ev.EventID)
+	if err != nil || got.SessionID != session {
+		t.Errorf("GetEvent: session=%q err=%v, want %s", got.SessionID, err, session)
 	}
 }

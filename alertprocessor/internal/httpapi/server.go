@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/config"
+	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/humanapproval"
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/processor"
 )
 
@@ -23,6 +24,7 @@ type Pinger interface {
 type Server struct {
 	cfg       config.HTTPConfig
 	processor *processor.Processor
+	approver  *humanapproval.Approver
 	log       *slog.Logger
 
 	// Named so /readyz can say which dependency is down.
@@ -35,16 +37,19 @@ type Server struct {
 func New(
 	cfg config.HTTPConfig,
 	proc *processor.Processor,
+	approver *humanapproval.Approver,
 	deps map[string]Pinger,
 	log *slog.Logger,
 ) *Server {
-	s := &Server{cfg: cfg, processor: proc, deps: deps, log: log}
+	s := &Server{cfg: cfg, processor: proc, approver: approver, deps: deps, log: log}
 
 	mux := http.NewServeMux()
 
 	// Method-qualified patterns (Go 1.22+): a GET to the webhook path gets 405
 	// from the router rather than reaching the handler and being rejected there.
 	mux.HandleFunc("POST "+cfg.WebhookPath, s.handleWebhook)
+
+	mux.HandleFunc("POST "+cfg.ApprovalPath, s.handleHumanApproval)
 
 	// Liveness. Deliberately answers from process state alone -- no Postgres, no
 	// RabbitMQ. A dependency outage must not make Kubernetes restart every
