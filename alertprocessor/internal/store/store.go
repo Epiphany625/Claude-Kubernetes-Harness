@@ -9,7 +9,6 @@ import (
 
 // Store is the persistence contract the processor depends on. It is an
 // interface so the handler and processor can be unit-tested without a database;
-// PostgresStore is the only production implementation.
 type Store interface {
 	// RecordEvent inserts ev, or returns the existing row if this notification
 	// has already been recorded. See RecordResult for why both cases succeed.
@@ -18,6 +17,13 @@ type Store interface {
 	// MarkPublished records that the broker has confirmed the message for
 	// eventID. Called only after a confirmed publish.
 	MarkPublished(ctx context.Context, eventID string) error
+
+	// GetEvent reads one event back; found is false when no row has eventID.
+	GetEvent(ctx context.Context, eventID string) (ev event.Event, found bool, err error)
+
+	// ApproveTool records that a human approved tool for the session paused on
+	// eventID. Returns ErrApprovalConflict when the session belongs to another event.
+	ApproveTool(ctx context.Context, eventID, sessionID, tool string) error
 
 	// Ping reports whether the database is reachable. Used by /readyz only --
 	// never by /healthz.
