@@ -93,6 +93,8 @@ class Event:
     alertName: str = ""
     severity: str = ""
     namespace: str = ""
+    
+    sessionID: str = "" # point to the previous session that we have with the agent. 
 
     # The most specific Kubernetes object the alert's labels name -- the pod,
     # else the deployment, else the node. A convenience projection; labels
@@ -133,6 +135,7 @@ class Event:
             alertName=_parseText(payload.get("alert_name")),
             severity=_parseText(payload.get("severity")),
             namespace=_parseText(payload.get("namespace")),
+            sessionID=_parseText(payload.get("session_id")),
             resource=_parseText(payload.get("resource")),
             summary=_parseText(payload.get("summary")),
             description=_parseText(payload.get("description")),
@@ -171,8 +174,27 @@ class Event:
         if where:
             parts.append(f"on {where}")
         return " ".join(parts)
-
+    
     def describe(self) -> str:
+        """The alert as the agent's prompt sees it: what fired and where, without
+        pipeline bookkeeping (event/alert ids, status, session)."""
+        rows: list[tuple[str, str]] = [
+            ("alert", self.alertName),
+            ("state", str(self.alertState)),
+            ("severity", self.severity),
+            ("namespace", self.namespace),
+            ("resource", self.resource),
+            ("summary", self.summary),
+            ("description", self.description),
+            ("runbook", self.runbookURL),
+            ("started at", _formatTime(self.startsAt)),
+            ("ended at", _formatTime(self.endsAt)),
+            ("labels", _formatMapping(self.labels)),
+            ("annotations", _formatMapping(self.annotations)),
+        ]
+        return "\n".join(f"- {name}: {value}" for name, value in rows if value)
+    
+    def describe_debug(self) -> str:
         """A readable block for the console, listing only what the event has."""
         rows: list[tuple[str, str]] = [
             ("event", self.eventID),
@@ -182,6 +204,7 @@ class Event:
             ("severity", self.severity),
             ("namespace", self.namespace),
             ("resource", self.resource),
+            ("session", self.sessionID),
             ("summary", self.summary),
             ("description", self.description),
             ("runbook", self.runbookURL),

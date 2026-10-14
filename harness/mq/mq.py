@@ -49,7 +49,7 @@ class RabbitMQService:
         
         redelivered = " (redelivered)" if message.redelivered else ""
         self.logger.info("[mq] %s%s", message.routing_key, redelivered)
-        self.logger.info(event.describe())
+        self.logger.info(event.describe_debug())
  
         # Waits here if the asyncio.Queue is full (backpressure). While we wait,
         # this message stays unacked, so RabbitMQ stops sending after `prefetch`.
