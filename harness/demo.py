@@ -13,9 +13,9 @@ from claude_agent_sdk import (
 )
 
 if __package__:
-    from .config.config import build_harness
+    from .config.config import build_agent
 else:
-    from config.config import build_harness
+    from config.config import build_agent
 
 
 def preview(value: object) -> str:
@@ -24,7 +24,7 @@ def preview(value: object) -> str:
 
 
 async def main() -> None:
-    options = build_harness()
+    options = build_agent()
     prompt = "Can you help me check and analyze my minikube cluster? Also report if there is anything wrong with it. "
     print(f"Prompt: {prompt}", flush=True)
     tool_names: dict[str, str] = {}

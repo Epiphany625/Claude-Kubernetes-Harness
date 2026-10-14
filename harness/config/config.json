@@ -9,6 +9,15 @@
     "queue": "agent.events",
     "routingPrefix": "alert"
   },
+  "postgres": {
+    "dsn": "",
+    "host": "",
+    "port": 5432,
+    "username": "",
+    "password": "",
+    "database": "",
+    "sslmode": "disable"
+  },
   "mcpServers": {
     "kubemcp": {
       "type": "http",

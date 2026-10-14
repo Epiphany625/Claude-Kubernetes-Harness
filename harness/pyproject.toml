@@ -8,4 +8,5 @@ dependencies = [
     "aio-pika>=10.1.0",
     "claude-agent-sdk>=0.2.153",
     "pika>=1.4.4",
+    "psycopg>=3.3.6",
 ]

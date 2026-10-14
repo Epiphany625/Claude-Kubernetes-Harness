@@ -54,6 +54,13 @@ class AgentOptionsConfig:
     agents: Dict[str, SubagentConfig]
     worker: int
     logger: Logger
+@dataclass
+class PostgresConfig:
+    """Resolved Postgres settings; timeouts are measured in seconds."""
+
+    dsn: str
+    connectTimeout: float
+    logger: Logger
 
 def load_value(key: str, default_value: Any = None) -> Any:
     """Look up a dotted key in the environment, then JSON, then the default.
@@ -119,8 +126,42 @@ def build_rabbitmq(logger: Logger) -> RabbitMQConfig:
         logger=logger
     )
 
+def build_postgres(logger: Logger) -> PostgresConfig:
+    """Build Postgres settings from a full DSN or from its escaped parts."""
+    dsn = load_value("postgres.dsn", "")
+    if not isinstance(dsn, str):
+        raise ValueError("postgres.dsn must be a string")
+    if dsn:
+        if not dsn.startswith(("postgres://", "postgresql://")):
+            raise ValueError("postgres.dsn scheme must be postgres:// or postgresql://")
+        return PostgresConfig(dsn=dsn, connectTimeout=10.0, logger=logger)
 
-def build_harness(logger: Logger) -> AgentOptionsConfig:
+    host = load_value("postgres.host", "")
+    if not isinstance(host, str) or not host.strip():
+        raise ValueError("postgres.dsn or postgres.host must be set")
+    port = load_value("postgres.port", 5432)
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError("postgres.port must be an integer between 1 and 65535")
+
+    username = str(load_value("postgres.username", ""))
+    password = str(load_value("postgres.password", ""))
+    database = str(load_value("postgres.database", "postgres"))
+    sslmode = str(load_value("postgres.sslmode", ""))
+    credentials = ""
+    if username:
+        credentials = quote(username, safe="")
+        if password:
+            credentials += f":{quote(password, safe='')}"
+        credentials += "@"
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    dsn = f"postgresql://{credentials}{host}:{port}/{quote(database, safe='')}"
+    if sslmode:
+        dsn += f"?sslmode={quote(sslmode, safe='')}"
+
+    return PostgresConfig(dsn=dsn, connectTimeout=10.0, logger=logger)
+
+def build_agent(logger: Logger) -> AgentOptionsConfig:
     """Build the orchestrator and its three subagents from harness config."""
     agent_prompts = {
         INVESTIGATOR: (prompts._INVESTIGATOR_DESCRIPTION, prompts._INVESTIGATOR_PROMPT),
@@ -165,13 +206,16 @@ def build_harness(logger: Logger) -> AgentOptionsConfig:
 class HarnessConfig:
     rabbitMQConfig: RabbitMQConfig
     agentOptionsConfig: AgentOptionsConfig
+    postgresConfig: PostgresConfig
 
 def load_config() -> HarnessConfig:
 
     agentLogger = logging.getLogger("agentService")
     rabbitLogger = logging.getLogger("rabbitmqService")
+    postgresLogger = logging.getLogger("postgresService")
 
     return HarnessConfig(
-        rabbitMQConfig=build_rabbitmq(rabbitLogger), 
-        agentOptionsConfig=build_harness(agentLogger),
+        rabbitMQConfig=build_rabbitmq(rabbitLogger),
+        agentOptionsConfig=build_agent(agentLogger),
+        postgresConfig=build_postgres(postgresLogger),
     )
