@@ -22,14 +22,14 @@ def guard_hook():
 class AgentService:
     def __init__(self, config: config.AgentOptionsConfig, taskQueue: asyncio.Queue[Event], pgClient: PostgresClient, sanity_check: bool = True):
         self.agentOptions = ClaudeAgentOptions(
-            tools=config.tools,
-            allowed_tools=config.allowed_tools, 
-            system_prompt=config.system_prompt, 
-            model=config.model, 
-            disallowed_tools=config.disallowed_tools, 
-            max_turns=config.max_turns, 
-            effort=config.effort, 
-            mcp_servers=config.mcp_servers,
+            tools=[*config.tools, *APPROVAL_TOOLS],
+            allowed_tools=[*config.allowed_tools, *APPROVAL_TOOLS],
+            system_prompt=config.system_prompt,
+            model=config.model,
+            disallowed_tools=config.disallowed_tools,
+            max_turns=config.max_turns,
+            effort=config.effort,
+            mcp_servers={**config.mcp_servers, APPROVAL_SERVER_NAME: APPROVAL_SERVER},
             agents={key: AgentDefinition(
                 description=val.description, 
                 prompt=val.prompt, 
@@ -46,25 +46,39 @@ class AgentService:
         self.sanity_check = sanity_check
         self.pgClient = pgClient
 
-        self.require_approval = config.require_approval
+        self.require_approval = config.require_approval # answers: does this run require human approval for write tools? 
 
-    def _callback_for(self, incident: str, require_approval: bool, sessionID: str) -> Callable:
+    def _callback_for(self, require_approval: bool, sessionID: str) -> Callable:
         async def can_use_tool(
             tool_name: str, tool_input: dict[str, Any], context: ToolPermissionContext
         ) -> PermissionResultAllow | PermissionResultDeny:
+            if not require_approval:
+                return PermissionResultAllow(updated_input=tool_input)
+
             if tool_name.startswith("mcp__kubemcp__"):
-                if (not self.require_approval) or tool_name in KUBEMCP_READ_TOOLS:
+                if tool_name in KUBEMCP_READ_TOOLS:
                     return PermissionResultAllow(updated_input=tool_input)
+                # check database to see whether the tool is already approved. 
                 elif tool_name in await self.pgClient.getApprovedTools(sessionID):
                     return PermissionResultAllow(updated_input=tool_input)
                 else:
-                    await asyncio.sleep(1) # do not touch this line. will later be replaced with a push notification.
                     print("_________permission result deny triggered for write tools")
-                    return PermissionResultDeny(message="This tool requires human-in-the-loop approval. The tool use is notified to the human for their approval, and the session will be saved. Please terminate your run and explain that once the human has approved, the execution will resume. ")
-            
+
+                    return PermissionResultDeny(message=(
+                        f"{tool_name} writes to the cluster and needs human approval; it was not run. "
+                        "Stop now: make no further writes and do not look for a workaround. "
+                        "End your run and report status \"skipped\", listing in `skipped` every "
+                        "write you have not applied yet -- this one first -- with its tool name, "
+                        "exact arguments, intent and risk, and the reason \"awaiting human approval\". "
+                        "The orchestrator submits them with ask_human_approval, and the session "
+                        "resumes once a human approves."
+                    ))
+
+            if tool_name in APPROVAL_TOOLS:
+                return PermissionResultAllow(updated_input=tool_input)
+
             return PermissionResultDeny(message="tool not allowed. ")
-                
-            # TODO. finish. 
+
         return can_use_tool
 
     async def _start_agent(self):
@@ -116,7 +130,7 @@ class AgentService:
 
         options = dataclasses.replace(
                 self.agentOptions,
-                can_use_tool=self._callback_for(event.describe() if event is not None else "", self.require_approval, sessionID),
+                can_use_tool=self._callback_for(self.require_approval, sessionID),
                 # The CLI rejects --session-id together with --resume.
                 resume=resume or None,
                 session_id=None if resume else sessionID,

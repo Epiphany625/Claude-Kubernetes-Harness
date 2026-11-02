@@ -20,9 +20,7 @@ CREATE TABLE IF NOT EXISTS event (
 
     session_id UUID, -- claude conversation session id related to this event. 
 
-    -- What the harness has done about this event. This service only ever writes
-    -- 'waiting'; the rest of the vocabulary belongs to harness/ and is declared
-    -- here so there is one definition of it.
+    -- What the harness has done about this event. 
     status        TEXT        NOT NULL DEFAULT 'waiting',
 
     -- What Prometheus says about the world, as distinct from `status` above. An
@@ -57,15 +55,13 @@ CREATE TABLE IF NOT EXISTS event (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    -- A CHECK rather than a PostgreSQL ENUM: adding a status later is an UPDATE
-    -- to this constraint, where an ENUM would need ALTER TYPE, which cannot run
-    -- inside a transaction on older servers and is awkward to make idempotent.
     CONSTRAINT event_status_valid CHECK (status IN (
         'waiting',
         'solving',
         'waiting_human_approval',
         'resolved',
-        'failed_to_resolve'
+        'failed_to_resolve',
+        'failed_tool_declined'
     )),
     CONSTRAINT event_alert_status_valid CHECK (alert_status IN ('firing', 'resolved'))
 );
