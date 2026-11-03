@@ -62,6 +62,23 @@ class PostgresConfig:
     connectTimeout: float
     logger: Logger
 
+@dataclass
+class EmailNotifierConfig:
+    """Resolved SMTP settings; the timeout is measured in seconds."""
+
+    user: str
+    password: str
+    to: str
+    approvalURL: str
+    smtpHost: str
+    smtpPort: int
+    smtpTimeout: float
+
+@dataclass
+class NotifiersConfig:
+    # None when notifiers.email.smtpHost is unset.
+    email: Optional[EmailNotifierConfig]
+
 def load_value(key: str, default_value: Any = None) -> Any:
     """Look up a dotted key in the environment, then JSON, then the default.
 
@@ -202,11 +219,52 @@ def build_agent(logger: Logger) -> AgentOptionsConfig:
         logger=logger
     )
 
+def build_email_notifier() -> Optional[EmailNotifierConfig]:
+    """Build SMTP settings, or None when notifiers.email.smtpHost is unset."""
+    smtpHost = load_value("notifiers.email.smtpHost", "")
+    if not isinstance(smtpHost, str) or not smtpHost.strip():
+        return None
+    smtpPort = load_value("notifiers.email.smtpPort", 465)
+    if isinstance(smtpPort, bool) or not isinstance(smtpPort, int) or not 1 <= smtpPort <= 65535:
+        raise ValueError("notifiers.email.smtpPort must be an integer between 1 and 65535")
+    smtpTimeout = load_value("notifiers.email.smtpTimeout", 10.0)
+    if isinstance(smtpTimeout, bool) or not isinstance(smtpTimeout, (int, float)) or smtpTimeout <= 0:
+        raise ValueError("notifiers.email.smtpTimeout must be a positive number of seconds")
+
+    user = str(load_value("notifiers.email.user", ""))
+    if not user:
+        raise ValueError("notifiers.email.user must be set")
+    to = str(load_value("notifiers.email.to", ""))
+    if not to:
+        raise ValueError("notifiers.email.to must be set")
+    approvalURL = str(load_value("notifiers.email.approvalURL", ""))
+    if not approvalURL.startswith(("http://", "https://")):
+        raise ValueError("notifiers.email.approvalURL must be an http:// or https:// URL")
+
+    return EmailNotifierConfig(
+        user=user,
+        password=str(load_value("notifiers.email.password", "")),
+        to=to,
+        approvalURL=approvalURL,
+        smtpHost=smtpHost,
+        smtpPort=smtpPort,
+        smtpTimeout=float(smtpTimeout),
+    )
+
+def build_notifiers(require_approval: bool) -> NotifiersConfig:
+    """Build every notifier's settings. With approval required, at least one
+    must be configured, or a paused session would wait for a human nobody told."""
+    notifiers = NotifiersConfig(email=build_email_notifier())
+    if require_approval and notifiers.email is None:
+        raise ValueError("policies.requireapproval is set, so notifiers.email.smtpHost must be set")
+    return notifiers
+
 @dataclass
 class HarnessConfig:
     rabbitMQConfig: RabbitMQConfig
     agentOptionsConfig: AgentOptionsConfig
     postgresConfig: PostgresConfig
+    notifiersConfig: NotifiersConfig
 
 def load_config() -> HarnessConfig:
 
@@ -214,8 +272,10 @@ def load_config() -> HarnessConfig:
     rabbitLogger = logging.getLogger("rabbitmqService")
     postgresLogger = logging.getLogger("postgresService")
 
+    agentOptionsConfig = build_agent(agentLogger)
     return HarnessConfig(
         rabbitMQConfig=build_rabbitmq(rabbitLogger),
-        agentOptionsConfig=build_agent(agentLogger),
+        agentOptionsConfig=agentOptionsConfig,
         postgresConfig=build_postgres(postgresLogger),
+        notifiersConfig=build_notifiers(agentOptionsConfig.require_approval),
     )

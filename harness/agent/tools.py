@@ -1,7 +1,9 @@
-import asyncio
 from typing import Any, Final
 
-from claude_agent_sdk import create_sdk_mcp_server, tool
+from claude_agent_sdk import McpSdkServerConfig, create_sdk_mcp_server, tool
+from pydantic import ValidationError
+
+from notifier.notifier import Action, NotifierSet
 
 KUBEMCP_READ_TOOLS: Final = set(
         ["mcp__kubemcp__list_resources",
@@ -46,24 +48,38 @@ ASK_HUMAN_APPROVAL_SCHEMA: Final = {
     "required": ["summary", "actions"],
 }
 
-# Placeholder: the request is not persisted yet.
-@tool(
-    "ask_human_approval",
-    "Submit the cluster writes the executor was refused to a human for approval. "
-    "Call it once with every pending write, then end the run: the session resumes "
-    "after the human approves.",
-    ASK_HUMAN_APPROVAL_SCHEMA,
-)
-async def ask_human_approval(args: dict[str, Any]) -> dict[str, Any]:
-    await asyncio.sleep(1)
-    tools = ", ".join(action["tool"] for action in args["actions"])
-    return {"content": [{"type": "text", "text": (
-        f"Approval requested for: {tools}. Nothing has been applied. "
-        "End your run now with outcome \"awaiting_approval\"; "
-        "the session resumes once a human approves."
-    )}]}
+# Built per event so the tool can hand the notifier the event it belongs to.
+def approval_server_for(notifierSet: NotifierSet, event_id: str, session_id: str) -> McpSdkServerConfig:
+    @tool(
+        "ask_human_approval",
+        "Submit the cluster writes the executor was refused to a human for approval. "
+        "Call it once with every pending write, then end the run: the session resumes "
+        "after the human approves.",
+        ASK_HUMAN_APPROVAL_SCHEMA,
+    )
+    async def ask_human_approval(args: dict[str, Any]) -> dict[str, Any]:
+        # The SDK does not enforce the input schema, so a malformed call goes back to Claude to retry.
+        try:
+            actions = [Action.model_validate(action) for action in args["actions"]]
+        except ValidationError as e:
+            return {"content": [{"type": "text", "text": f"Invalid actions: {e}"}], "is_error": True}
 
-APPROVAL_SERVER: Final = create_sdk_mcp_server(name=APPROVAL_SERVER_NAME, tools=[ask_human_approval])
+        try:
+            notifierSet.notify(args["summary"], actions, event_id, session_id)
+        except Exception as e:
+            return {"content": [{"type": "text", "text": (
+                f"No human could be notified ({e}). Nothing has been applied and no approval is pending. "
+                "End your run now and report every write as skipped."
+            )}], "is_error": True}
+        tools = ", ".join(action.tool for action in actions)
+        return {"content": [{"type": "text", "text": (
+            f"Approval requested for: {tools}. Nothing has been applied. "
+            "End your run now with outcome \"awaiting_approval\"; "
+            "the session resumes once a human approves."
+        )}]}
+
+    return create_sdk_mcp_server(name=APPROVAL_SERVER_NAME, tools=[ask_human_approval])
+
 APPROVAL_TOOLS: Final = set([ASK_HUMAN_APPROVAL_TOOL])
 
 KUBEMCP_NO_TOOLS: Final = set([])

@@ -1,8 +1,10 @@
 from agent.agent import AgentService
 from mq.mq import RabbitMQService
-from config.config import HarnessConfig
+from config.config import *
 from mq.event import Event
 from postgres.postgres import PostgresClient
+from notifier.notifier import Notifier, NotifierSet
+from notifier.email_notifier import EmailNotifier
 
 import asyncio
 from logging import Logger
@@ -10,7 +12,7 @@ import sys
 
 class Harness:
     # TODO: make the logger variable typed.
-    def __init__(self, harnessConfig: HarnessConfig, sanity_check: bool = False):
+    def __init__(self, harnessConfig: HarnessConfig, notifiersConfig: NotifiersConfig, sanity_check: bool = False):
         # a task queue for agentService to consume and rabbitmq service to produce.
         self.taskQueue = asyncio.Queue[Event](maxsize=100)
 
@@ -20,9 +22,17 @@ class Harness:
 
         self.pgClient = PostgresClient(postgresConfig)
 
+        notifiers: list[Notifier] = []
+        
+        # TODO. edit here if more notifiers are supported. 
+        emailConfig = notifiersConfig.email
+        if emailConfig is not None:
+            notifiers.append(EmailNotifier(emailConfig))
+        notifierSet = NotifierSet(notifiers)
+
         # initialize two services
         self.rabbitmqService = RabbitMQService(rabbitMQConfig, self.taskQueue, rabbitMQConfig.logger, sanity_check=sanity_check)
-        self.agentService = AgentService(agentOptionsConfig, self.taskQueue, self.pgClient, sanity_check)
+        self.agentService = AgentService(agentOptionsConfig, self.taskQueue, self.pgClient, notifierSet, sanity_check)
 
     async def start(self):
         if self.rabbitmqService is None or self.agentService is None:

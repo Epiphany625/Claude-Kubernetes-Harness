@@ -1,0 +1,13 @@
+Approval needed
+
+$summary
+
+The agent stopped before these cluster writes and is waiting for your decision.
+
+$actions
+
+Review the exact arguments and approve or decline here:
+$link
+
+event   $event_id
+session $session_id

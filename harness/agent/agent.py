@@ -1,6 +1,7 @@
 from claude_agent_sdk import ClaudeAgentOptions, query, ToolPermissionContext, AssistantMessage, UserMessage, TextBlock, ResultMessage, PermissionResultAllow, PermissionResultDeny, ToolUseBlock, ToolResultBlock, AgentDefinition, HookMatcher
 from mq.event import AlertState, Event, Status
 from postgres.postgres import PostgresClient
+from notifier.notifier import NotifierSet
 from textwrap import shorten
 import config.config as config
 import json
@@ -20,7 +21,7 @@ def preview(value: object) -> str:
 def guard_hook():
     pass
 class AgentService:
-    def __init__(self, config: config.AgentOptionsConfig, taskQueue: asyncio.Queue[Event], pgClient: PostgresClient, sanity_check: bool = True):
+    def __init__(self, config: config.AgentOptionsConfig, taskQueue: asyncio.Queue[Event], pgClient: PostgresClient, notifierSet: NotifierSet, sanity_check: bool = True):
         self.agentOptions = ClaudeAgentOptions(
             tools=[*config.tools, *APPROVAL_TOOLS],
             allowed_tools=[*config.allowed_tools, *APPROVAL_TOOLS],
@@ -29,7 +30,7 @@ class AgentService:
             disallowed_tools=config.disallowed_tools,
             max_turns=config.max_turns,
             effort=config.effort,
-            mcp_servers={**config.mcp_servers, APPROVAL_SERVER_NAME: APPROVAL_SERVER},
+            mcp_servers=config.mcp_servers,
             agents={key: AgentDefinition(
                 description=val.description, 
                 prompt=val.prompt, 
@@ -45,6 +46,7 @@ class AgentService:
         self.worker = config.worker # number of workers. 
         self.sanity_check = sanity_check
         self.pgClient = pgClient
+        self.notifierSet = notifierSet
 
         self.require_approval = config.require_approval # answers: does this run require human approval for write tools? 
 
@@ -128,8 +130,13 @@ class AgentService:
         if event is not None and not resume:
             await self.pgClient.insertSessionID(event.eventID, sessionID)
 
+        eventID = event.eventID if event is not None else ""
         options = dataclasses.replace(
                 self.agentOptions,
+                mcp_servers={
+                    **self.agentOptions.mcp_servers,
+                    APPROVAL_SERVER_NAME: approval_server_for(self.notifierSet, eventID, sessionID),
+                },
                 can_use_tool=self._callback_for(self.require_approval, sessionID),
                 # The CLI rejects --session-id together with --resume.
                 resume=resume or None,
