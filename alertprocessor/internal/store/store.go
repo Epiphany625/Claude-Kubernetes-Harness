@@ -21,9 +21,9 @@ type Store interface {
 	// GetEvent reads one event back; found is false when no row has eventID.
 	GetEvent(ctx context.Context, eventID string) (ev event.Event, found bool, err error)
 
-	// ApproveTool records that a human approved tool for the session paused on
+	// ApproveTools records that a human approved tools for the session paused on
 	// eventID. Returns ErrApprovalConflict when the session belongs to another event.
-	ApproveTool(ctx context.Context, eventID, sessionID, tool string) error
+	ApproveTools(ctx context.Context, eventID, sessionID string, tools []string) error
 
 	// Ping reports whether the database is reachable. Used by /readyz only --
 	// never by /healthz.

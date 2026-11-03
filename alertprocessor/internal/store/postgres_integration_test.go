@@ -19,6 +19,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"slices"
 	"testing"
 	"time"
 
@@ -408,7 +409,7 @@ func TestEmptyLabelsStoreAsEmptyObject(t *testing.T) {
 	}
 }
 
-func TestApproveTool(t *testing.T) {
+func TestApproveTools(t *testing.T) {
 	ctx := context.Background()
 	s := newStore(t)
 
@@ -422,9 +423,12 @@ func TestApproveTool(t *testing.T) {
 	}
 	session := uuid.NewString()
 
-	for _, tool := range []string{"scale_deployment", "scale_deployment", "patch_resource"} {
-		if err := s.ApproveTool(ctx, ev.EventID, session, tool); err != nil {
-			t.Fatalf("ApproveTool(%s): %v", tool, err)
+	for _, tools := range [][]string{
+		{"scale_deployment", "scale_deployment", "patch_resource"},
+		{"patch_resource", "rollout_restart", "rollout_restart"},
+	} {
+		if err := s.ApproveTools(ctx, ev.EventID, session, tools); err != nil {
+			t.Fatalf("ApproveTools(%v): %v", tools, err)
 		}
 	}
 
@@ -433,12 +437,12 @@ func TestApproveTool(t *testing.T) {
 		`SELECT approved_tools FROM approval WHERE session_id = $1`, session).Scan(&tools); err != nil {
 		t.Fatalf("read approval: %v", err)
 	}
-	if len(tools) != 2 || tools[0] != "scale_deployment" || tools[1] != "patch_resource" {
-		t.Errorf("approved_tools = %v, want [scale_deployment patch_resource]", tools)
+	if want := []string{"scale_deployment", "patch_resource", "rollout_restart"}; !slices.Equal(tools, want) {
+		t.Errorf("approved_tools = %v, want %v", tools, want)
 	}
 
-	if err := s.ApproveTool(ctx, other.EventID, session, "scale_deployment"); !errors.Is(err, store.ErrApprovalConflict) {
-		t.Errorf("ApproveTool for another event's session: err = %v, want ErrApprovalConflict", err)
+	if err := s.ApproveTools(ctx, other.EventID, session, []string{"scale_deployment"}); !errors.Is(err, store.ErrApprovalConflict) {
+		t.Errorf("ApproveTools for another event's session: err = %v, want ErrApprovalConflict", err)
 	}
 }
 

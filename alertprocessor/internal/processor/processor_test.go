@@ -61,7 +61,7 @@ func (f *fakeStore) GetEvent(context.Context, string) (event.Event, bool, error)
 	return event.Event{}, false, nil
 }
 
-func (f *fakeStore) ApproveTool(context.Context, string, string, string) error { return nil }
+func (f *fakeStore) ApproveTools(context.Context, string, string, []string) error { return nil }
 
 func (f *fakeStore) marked() []string {
 	f.mu.Lock()

@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Approval Request</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #5d6677; --border: #e2e5eb;
+    --code-bg: #f1f3f6; --accent: #2f6fdf;
+    --approve: #1f8a4c; --decline: #b3342f;
+    --low-bg: #e4f4ea; --low-fg: #1f6b3d; --medium-bg: #fff2d6; --medium-fg: #8a5a00;
+    --high-bg: #fde4e2; --high-fg: #a3302a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b2029; --text: #e6e9ef; --muted: #9aa3b2; --border: #2c333f;
+      --code-bg: #232a35; --accent: #6b9cf5;
+      --approve: #3fb873; --decline: #e06a63;
+      --low-bg: #193325; --low-fg: #7fd6a3; --medium-bg: #3a2f14; --medium-fg: #f0c463;
+      --high-bg: #3d1d1b; --high-fg: #f39a93;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
+  .eyebrow { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; margin: 0 0 4px; }
+  h1 { font-size: 24px; line-height: 1.3; margin: 0 0 8px; }
+  h2 { font-size: 15px; margin: 32px 0 12px; color: var(--muted); font-weight: 600; }
+  .summary { margin: 0 0 8px; font-size: 16px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; margin-bottom: 12px; }
+  dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+  dt { color: var(--muted); }
+  dd { margin: 0; overflow-wrap: anywhere; }
+  .action-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+  .tool { font: 600 14px ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+  .badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: .04em; }
+  .risk-low { background: var(--low-bg); color: var(--low-fg); }
+  .risk-medium { background: var(--medium-bg); color: var(--medium-fg); }
+  .risk-high { background: var(--high-bg); color: var(--high-fg); }
+  .intent { margin: 0 0 10px; }
+  pre {
+    margin: 0; padding: 12px; background: var(--code-bg); border-radius: 8px; overflow-x: auto;
+    font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .decide { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 24px; }
+  button {
+    font: 600 15px inherit; font-family: inherit; padding: 10px 22px; border-radius: 8px;
+    border: 1px solid transparent; cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: default; }
+  .approve { background: var(--approve); color: #fff; }
+  .decline { background: transparent; color: var(--decline); border-color: var(--decline); }
+  .note { color: var(--muted); font-size: 13px; margin-top: 12px; }
+  .result { margin-top: 20px; padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); }
+  .result.ok { border-color: var(--approve); }
+  .result.err { border-color: var(--decline); }
+  .error { border-color: var(--decline); }
+  .ids { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted); margin-top: 32px; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+{{if .Error}}
+  <p class="eyebrow">Approval request</p>
+  <h1>This request can't be reviewed</h1>
+  <div class="card error">{{.Error}}</div>
+{{else}}
+  <p class="eyebrow">Approval needed</p>
+  <h1>{{with .Event.AlertName}}{{.}}{{else}}Cluster write{{end}}</h1>
+  {{with .Summary}}<p class="summary">{{.}}</p>{{end}}
+
+  <h2>Alert</h2>
+  <div class="card">
+    <dl>
+      {{with .Event.Severity}}<dt>Severity</dt><dd>{{.}}</dd>{{end}}
+      {{with .Event.Namespace}}<dt>Namespace</dt><dd>{{.}}</dd>{{end}}
+      {{with .Event.Resource}}<dt>Resource</dt><dd>{{.}}</dd>{{end}}
+      {{with .Event.Summary}}<dt>Summary</dt><dd>{{.}}</dd>{{end}}
+      {{with .Event.Description}}<dt>Description</dt><dd>{{.}}</dd>{{end}}
+      {{with .Event.Status}}<dt>Status</dt><dd>{{.}}</dd>{{end}}
+    </dl>
+  </div>
+
+  <h2>Proposed writes, in the order they will run</h2>
+  {{range .Actions}}
+  <div class="card">
+    <div class="action-head">
+      <span class="tool">{{.Tool}}</span>
+      <span class="badge risk-{{.Risk}}">{{.Risk}} risk</span>
+    </div>
+    <p class="intent">{{.Intent}}</p>
+    <pre>{{.Arguments}}</pre>
+  </div>
+  {{end}}
+
+  <div class="decide" id="decide">
+    <button class="approve" data-decision="approved">Approve</button>
+    <button class="decline" data-decision="declined">Decline</button>
+  </div>
+  <p class="note">Approving lets this session call {{range $i, $tool := .Request.Tools}}{{if $i}}, {{end}}<code>{{$tool}}</code>{{end}} with any arguments, not only the ones shown above.</p>
+  <div id="result" class="result" hidden></div>
+
+  <p class="ids">event {{.Request.EventID}} · session {{.Request.SessionID}}</p>
+
+<script>
+  const request = {{.Request}};
+  const result = document.getElementById("result");
+  const buttons = document.querySelectorAll("#decide button");
+
+  for (const button of buttons) {
+    button.addEventListener("click", async () => {
+      buttons.forEach((b) => (b.disabled = true));
+      const decision = button.dataset.decision;
+      try {
+        const response = await fetch(window.location.pathname, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...request, decision }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || response.status + " " + response.statusText);
+        result.className = "result ok";
+        result.textContent = decision === "approved"
+          ? "Approved. The agent will resume and apply these writes."
+          : "Declined. Nothing will be applied.";
+      } catch (err) {
+        buttons.forEach((b) => (b.disabled = false));
+        result.className = "result err";
+        result.textContent = "Could not record your decision: " + err.message;
+      }
+      result.hidden = false;
+    });
+  }
+</script>
+{{end}}
+</main>
+</body>
+</html>

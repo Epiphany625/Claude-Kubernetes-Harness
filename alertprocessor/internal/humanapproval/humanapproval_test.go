@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"testing"
 
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/event"
@@ -16,14 +17,16 @@ const (
 	eventID   = "11111111-1111-4111-8111-111111111111"
 	sessionID = "22222222-2222-4222-8222-222222222222"
 	otherID   = "33333333-3333-4333-8333-333333333333"
-	tool      = "mcp__kubemcp__scale_deployment"
+	scaleTool = "mcp__kubemcp__scale_deployment"
+	patchTool = "mcp__kubemcp__patch_resource"
 )
 
 type fakeStore struct {
 	store.Store
-	events     map[string]event.Event
-	approveErr error
-	approved   []string
+	events       map[string]event.Event
+	approveErr   error
+	approveCalls int
+	approved     []string
 }
 
 func (f *fakeStore) GetEvent(_ context.Context, id string) (event.Event, bool, error) {
@@ -31,11 +34,14 @@ func (f *fakeStore) GetEvent(_ context.Context, id string) (event.Event, bool, e
 	return ev, ok, nil
 }
 
-func (f *fakeStore) ApproveTool(_ context.Context, eventID, sessionID, tool string) error {
+func (f *fakeStore) ApproveTools(_ context.Context, eventID, sessionID string, tools []string) error {
+	f.approveCalls++
 	if f.approveErr != nil {
 		return f.approveErr
 	}
-	f.approved = append(f.approved, eventID+"/"+sessionID+"/"+tool)
+	for _, tool := range tools {
+		f.approved = append(f.approved, eventID+"/"+sessionID+"/"+tool)
+	}
 	return nil
 }
 
@@ -62,17 +68,18 @@ func newApprover(ev event.Event) (*Approver, *fakeStore, *fakePublisher) {
 }
 
 func approval(d Decision) HumanApproval {
-	return HumanApproval{EventID: eventID, SessionID: sessionID, Tool: tool, Decision: d}
+	return HumanApproval{EventID: eventID, SessionID: sessionID, Tools: []string{scaleTool, patchTool}, Decision: d}
 }
 
-func TestApprovedRecordsToolThenRepublishesWithSession(t *testing.T) {
+func TestApprovedRecordsToolsThenRepublishesOnceWithSession(t *testing.T) {
 	ap, st, pub := newApprover(event.Event{EventID: eventID, AlertName: "KubePodCrashLooping"})
 
 	if err := ap.Process(context.Background(), approval(DecisionApproved)); err != nil {
 		t.Fatalf("Process: %v", err)
 	}
-	if want := eventID + "/" + sessionID + "/" + tool; len(st.approved) != 1 || st.approved[0] != want {
-		t.Errorf("approved = %v, want [%s]", st.approved, want)
+	want := []string{eventID + "/" + sessionID + "/" + scaleTool, eventID + "/" + sessionID + "/" + patchTool}
+	if st.approveCalls != 1 || !slices.Equal(st.approved, want) {
+		t.Errorf("approved = %v in %d calls, want %v in one call", st.approved, st.approveCalls, want)
 	}
 	if len(pub.published) != 1 {
 		t.Fatalf("published %d events, want 1", len(pub.published))
@@ -106,13 +113,19 @@ func TestProcessErrors(t *testing.T) {
 		{
 			name:     "bad event id",
 			stored:   event.Event{EventID: eventID},
-			approval: HumanApproval{EventID: "nope", SessionID: sessionID, Tool: tool, Decision: DecisionApproved},
+			approval: HumanApproval{EventID: "nope", SessionID: sessionID, Tools: []string{scaleTool}, Decision: DecisionApproved},
 			want:     ErrInvalid,
 		},
 		{
-			name:     "missing tool",
+			name:     "missing tools",
 			stored:   event.Event{EventID: eventID},
 			approval: HumanApproval{EventID: eventID, SessionID: sessionID, Decision: DecisionApproved},
+			want:     ErrInvalid,
+		},
+		{
+			name:     "empty tool name",
+			stored:   event.Event{EventID: eventID},
+			approval: HumanApproval{EventID: eventID, SessionID: sessionID, Tools: []string{scaleTool, ""}, Decision: DecisionApproved},
 			want:     ErrInvalid,
 		},
 		{

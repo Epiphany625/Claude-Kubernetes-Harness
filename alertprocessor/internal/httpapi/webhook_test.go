@@ -62,13 +62,15 @@ func (f *fakeStore) GetEvent(_ context.Context, id string) (event.Event, bool, e
 	return ev, ok, nil
 }
 
-func (f *fakeStore) ApproveTool(_ context.Context, eventID, sessionID, tool string) error {
+func (f *fakeStore) ApproveTools(_ context.Context, eventID, sessionID string, tools []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.approveErr != nil {
 		return f.approveErr
 	}
-	f.approved = append(f.approved, eventID+"/"+sessionID+"/"+tool)
+	for _, tool := range tools {
+		f.approved = append(f.approved, eventID+"/"+sessionID+"/"+tool)
+	}
 	return nil
 }
 

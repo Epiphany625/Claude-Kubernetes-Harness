@@ -50,6 +50,7 @@ func New(
 	mux.HandleFunc("POST "+cfg.WebhookPath, s.handleWebhook)
 
 	mux.HandleFunc("POST "+cfg.ApprovalPath, s.handleHumanApproval)
+	mux.HandleFunc("GET "+cfg.ApprovalPath, s.handleApprovalPage)
 
 	// Liveness. Deliberately answers from process state alone -- no Postgres, no
 	// RabbitMQ. A dependency outage must not make Kubernetes restart every
