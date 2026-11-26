@@ -1,19 +1,12 @@
 from dataclasses import replace
 
 from mq.event import Status, Event
-from postgres.postgres import PostgresClientABC
+from postgres.postgres import PostgresClientABC, EventStoreABC, ApprovalStoreABC
 
-
-class PostgresClientMock(PostgresClientABC):
-    def __init__(
-        self,
-        events: list[Event] | None = None,
-        approvedTools: dict[str, set[str]] | None = None,
-    ):
-        self.events: dict[str, Event] = {e.eventID: e for e in events or []}  # eventID: event
-        self.approvedTools: dict[str, set[str]] = dict(approvedTools or {})  # sessionID: approved tools
-        self.approvalTried: set[str] = set()
-
+class EventStoreMock(EventStoreABC):
+    def __init__(self):
+        self.events: dict[str, Event] = {}  # eventID: event
+        
     async def insertEvent(self, event: Event) -> None:
         if event.eventID in self.events:
             raise ValueError(f"insert event {event.eventID}: already exists")
@@ -29,6 +22,22 @@ class PostgresClientMock(PostgresClientABC):
             raise LookupError(f"set status {newState} on event {eventID}: no such event")
         self.events[eventID] = replace(self.events[eventID], status=newState)
 
+
+class ApprovalStoreMock(ApprovalStoreABC):
+    def __init__(self):
+        self.approvedTools: dict[str, set[str]] = {}  # sessionID: approved tools
+        self.approvalTried: set[str] = set()
     async def getApprovedTools(self, sessionID: str) -> set[str]:
         self.approvalTried.add(sessionID)
         return set(self.approvedTools.get(sessionID, set()))
+class PostgresClientMock(PostgresClientABC):
+    def __init__(self):
+        self.eventStore = EventStoreMock()
+        self.approvalStore = ApprovalStoreMock()
+        self.claudeSessionStore = None # disable claude session store because it's irrelevant for unit test.
+
+    async def start(self) -> None:
+        pass
+
+
+

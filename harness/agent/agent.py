@@ -1,6 +1,6 @@
 from claude_agent_sdk import ClaudeAgentOptions, query, ToolPermissionContext, AssistantMessage, UserMessage, TextBlock, ResultMessage, PermissionResultAllow, PermissionResultDeny, ToolUseBlock, ToolResultBlock, AgentDefinition, HookMatcher
 from mq.event import AlertState, Event, Status
-from postgres.postgres import PostgresClientABC
+from postgres.postgres import PostgresClient
 from notifier.notifier import NotifierSet
 from textwrap import shorten
 import config.config as config
@@ -40,7 +40,7 @@ def report_outcome(result: str | None) -> str | None:
 def guard_hook():
     pass
 class AgentService:
-    def __init__(self, config: config.AgentOptionsConfig, taskQueue: asyncio.Queue[Event], pgClient: PostgresClientABC, notifierSet: NotifierSet):
+    def __init__(self, config: config.AgentOptionsConfig, taskQueue: asyncio.Queue[Event], pgClient: PostgresClient, notifierSet: NotifierSet):
         self.agentOptions = ClaudeAgentOptions(
             tools=[*config.tools, *APPROVAL_TOOLS],
             allowed_tools=[*config.allowed_tools, *APPROVAL_TOOLS],
@@ -79,7 +79,7 @@ class AgentService:
                 if tool_name in KUBEMCP_READ_TOOLS:
                     return PermissionResultAllow(updated_input=tool_input)
                 # check database to see whether the tool is already approved. 
-                elif tool_name in await self.pgClient.getApprovedTools(sessionID):
+                elif tool_name in await self.pgClient.approvalStore.getApprovedTools(sessionID):
                     return PermissionResultAllow(updated_input=tool_input)
                 else:
                     self.logger.info(f"[agent] {tool_name} denied: awaiting human approval")
@@ -137,8 +137,8 @@ class AgentService:
         resume = event.sessionID
         sessionID = resume or str(uuid.uuid4())
         if not resume:
-            await self.pgClient.insertSessionID(event.eventID, sessionID)
-        await self.pgClient.updateEventState(event.eventID, Status.SOLVING)
+            await self.pgClient.eventStore.insertSessionID(event.eventID, sessionID)
+        await self.pgClient.eventStore.updateEventState(event.eventID, Status.SOLVING)
         self.logger.info(f"[agent] event {event.eventID}: {'resuming' if resume else 'new'} session {sessionID}")
         self.logger.debug(f"[agent] prompt:\n{prompt}")
 
@@ -148,6 +148,7 @@ class AgentService:
                     **self.agentOptions.mcp_servers,
                     APPROVAL_SERVER_NAME: approval_server_for(self.notifierSet, event.eventID, sessionID),
                 },
+                session_store=self.pgClient.claudeSessionStore, 
                 can_use_tool=self._callback_for(self.require_approval, sessionID),
                 # The CLI rejects --session-id together with --resume.
                 resume=resume or None,
@@ -176,7 +177,7 @@ class AgentService:
                             self.logger.info(f"[{'error' if block.is_error else 'ok'}] {name}: {preview(block.content)}")
                             if name == ASK_HUMAN_APPROVAL_TOOL and not block.is_error and not approvalRequested:
                                 approvalRequested = True
-                                await self.pgClient.updateEventState(event.eventID, Status.WAITING_HUMAN_APPROVAL)
+                                await self.pgClient.eventStore.updateEventState(event.eventID, Status.WAITING_HUMAN_APPROVAL)
                 elif isinstance(message, ResultMessage):
                     outcome = report_outcome(message.result) or outcome
                     summary = (
@@ -191,14 +192,14 @@ class AgentService:
         except Exception:
             if not approvalRequested:
                 with suppress(Exception):
-                    await self.pgClient.updateEventState(event.eventID, Status.FAILED_TO_RESOLVE)
+                    await self.pgClient.eventStore.updateEventState(event.eventID, Status.FAILED_TO_RESOLVE)
             raise
 
         if approvalRequested:
             self.logger.info(f"[agent] event {event.eventID}: outcome={outcome}, status={Status.WAITING_HUMAN_APPROVAL}")
             return
         final = Status.RESOLVED if outcome == "resolved" else Status.FAILED_TO_RESOLVE
-        await self.pgClient.updateEventState(event.eventID, final)
+        await self.pgClient.eventStore.updateEventState(event.eventID, final)
         self.logger.info(f"[agent] event {event.eventID}: outcome={outcome}, status={final}")
 
 

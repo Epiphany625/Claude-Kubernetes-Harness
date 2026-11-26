@@ -65,7 +65,7 @@ def service(monkeypatch: pytest.MonkeyPatch):
     return agent_module.AgentService(
         config=cfg,
         taskQueue=asyncio.Queue(),
-        pgClient=None, # will be defined in individual tests. 
+        pgClient=PostgresClientMock(), # tests that assert on calls swap in fake_pg().
         notifierSet=notifier,
     )
 
@@ -95,16 +95,21 @@ def report(outcome):
     return f'```json\n{{"alert": "PodImagePullError", "outcome": "{outcome}"}}\n```'
 
 
-def fake_pg():
+def fake_pg(approvedTools=None):
     return SimpleNamespace(
-        insertSessionID=AsyncMock(),
-        updateEventState=AsyncMock(),
-        getApprovedTools=AsyncMock(return_value=set()),
+        eventStore=SimpleNamespace(
+            insertSessionID=AsyncMock(),
+            updateEventState=AsyncMock(),
+        ),
+        approvalStore=SimpleNamespace(
+            getApprovedTools=AsyncMock(return_value=set(approvedTools or ())),
+        ),
+        claudeSessionStore=None,
     )
 
 
 def statuses(pg):
-    return [call.args for call in pg.updateEventState.await_args_list]
+    return [call.args for call in pg.eventStore.updateEventState.await_args_list]
 
 
 def replay(monkeypatch, messages, error=None):
@@ -123,12 +128,7 @@ async def test_handle_event(service: agent_module.AgentService, monkeypatch: pyt
     calls = []
     permissions = []
     tool_name = "mcp__kubemcp__rollout_restart"
-    pg = SimpleNamespace(
-            insertSessionID=AsyncMock(),
-            updateEventState=AsyncMock(),
-            getApprovedTools=AsyncMock(return_value={tool_name}),
-    )
-    service.pgClient = pg
+    service.pgClient = pg = fake_pg({tool_name})
 
     async def fake_query(*, prompt, options):
         calls.append({
@@ -193,10 +193,10 @@ async def test_handle_event(service: agent_module.AgentService, monkeypatch: pyt
     # New session
     assert options.resume is None
     assert options.session_id is not None
-    service.pgClient.insertSessionID.assert_awaited_once_with(
+    pg.eventStore.insertSessionID.assert_awaited_once_with(
         "alert-123", options.session_id,
     )
-    service.pgClient.getApprovedTools.assert_awaited_once_with(
+    pg.approvalStore.getApprovedTools.assert_awaited_once_with(
         options.session_id,
     )
     assert len(permissions) == 1
@@ -301,7 +301,7 @@ async def test_resumed_session_is_solving_again(service: agent_module.AgentServi
 
     await service._handle_event(fake_event(session_id="session-1"))
 
-    pg.insertSessionID.assert_not_awaited()
+    pg.eventStore.insertSessionID.assert_not_awaited()
     assert statuses(pg) == [
         ("alert-123", Status.SOLVING),
         ("alert-123", Status.RESOLVED),
@@ -341,11 +341,7 @@ def test_report_outcome(result, expected):
 @pytest.mark.asyncio
 async def test_permission_read_allowed(service: agent_module.AgentService):
     sessionID = "session-1"
-    pg = SimpleNamespace(
-            insertSessionID=AsyncMock(),
-            getApprovedTools=AsyncMock(return_value=[]),
-    )
-    service.pgClient = pg
+    service.pgClient = pg = fake_pg()
     callback = service._callback_for(
         require_approval=True,
         sessionID=sessionID,
@@ -357,16 +353,12 @@ async def test_permission_read_allowed(service: agent_module.AgentService):
             ToolPermissionContext(),
         )
         assert isinstance(result, PermissionResultAllow)
-    service.pgClient.getApprovedTools.assert_not_awaited()
+    pg.approvalStore.getApprovedTools.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_write_denied_without_approval(service: agent_module.AgentService):
-    pg = SimpleNamespace(
-            insertSessionID=AsyncMock(),
-            getApprovedTools=AsyncMock(return_value=[]),
-        )
-    service.pgClient = pg
+    service.pgClient = pg = fake_pg()
     sessionID = "session-1"
 
     callback = service._callback_for(
@@ -383,7 +375,7 @@ async def test_write_denied_without_approval(service: agent_module.AgentService)
         assert isinstance(result, PermissionResultDeny)
         assert "awaiting human approval" in result.message
 
-    getApprovedTools = service.pgClient.getApprovedTools
+    getApprovedTools = pg.approvalStore.getApprovedTools
     assert getApprovedTools.await_count == len(KUBEMCP_APPROVAL_TOOLS)
     for call in getApprovedTools.await_args_list:
         assert call.args == (sessionID,)
@@ -394,10 +386,10 @@ async def test_write_denied_without_approval(service: agent_module.AgentService)
 async def test_write_allowed_after_approval(service: agent_module.AgentService):
     sessionID = "session-1"
     service.pgClient = PostgresClientMock()
-    service.pgClient.approvedTools[sessionID] = set()
+    service.pgClient.approvalStore.approvedTools[sessionID] = set()
     
     for tool in KUBEMCP_APPROVAL_TOOLS:
-        service.pgClient.approvedTools[sessionID].add(tool)
+        service.pgClient.approvalStore.approvedTools[sessionID].add(tool)
 
         callback = service._callback_for(
             require_approval=True,
@@ -412,17 +404,13 @@ async def test_write_allowed_after_approval(service: agent_module.AgentService):
 
         assert isinstance(result, PermissionResultAllow)
         assert result.updated_input == {"name": "my-pod"}
-        service.pgClient.approvedTools[sessionID] = set()
+        service.pgClient.approvalStore.approvedTools[sessionID] = set()
 
 
 
 @pytest.mark.asyncio
 async def test_other_tool_denied(service: agent_module.AgentService):
-    pg = SimpleNamespace(
-            insertSessionID=AsyncMock(),
-            getApprovedTools=AsyncMock(return_value=[]),
-        )
-    service.pgClient = pg
+    service.pgClient = pg = fake_pg()
     callback = service._callback_for(
         require_approval=True,
         sessionID="session-1",
@@ -440,11 +428,7 @@ async def test_other_tool_denied(service: agent_module.AgentService):
 
 @pytest.mark.asyncio
 async def test_approval_disabled(service: agent_module.AgentService):
-    pg = SimpleNamespace(
-            insertSessionID=AsyncMock(),
-            getApprovedTools=AsyncMock(return_value=[]),
-        )
-    service.pgClient = pg
+    service.pgClient = pg = fake_pg()
     
     callback = service._callback_for(
         require_approval=False,
@@ -458,4 +442,4 @@ async def test_approval_disabled(service: agent_module.AgentService):
     )
 
     assert isinstance(result, PermissionResultAllow)
-    service.pgClient.getApprovedTools.assert_not_awaited()
+    pg.approvalStore.getApprovedTools.assert_not_awaited()
