@@ -136,7 +136,7 @@ to test with curl:
 ```bash
 curl -i -X POST http://localhost:8080/api/v1/alerts \
   -H 'Content-Type: application/json' \
-  --data-binary @alertprocessor/test/testdata/firing-batch.json
+  --data-binary @test/testdata/firing-batch.json
 ```
 
 ### Build and push the Docker image to Docker Hub
@@ -237,7 +237,7 @@ generated password inside a YAML string.
 | `WEBHOOK_PATH`       | `/api/v1/alerts` | Must match the `url` in the AlertmanagerConfig |
 | `MAX_BODY_BYTES`     | `8388608`        | 8 MiB. Bounds memory on a large batch          |
 | `HTTP_READ_TIMEOUT`  | `15s`            |                                                |
-| `HTTP_WRITE_TIMEOUT` | `30s`            | Must exceed the fixed 8s AMQP publish timeout             |
+| `HTTP_WRITE_TIMEOUT` | `30s`            | Must exceed the fixed 8s AMQP publish timeout  |
 | `HTTP_IDLE_TIMEOUT`  | `60s`            |                                                |
 | `SHUTDOWN_TIMEOUT`   | `20s`            | In-flight webhooks are drained                 |
 
@@ -259,9 +259,9 @@ yourself.
 
 ### RabbitMQ
 
-| Variable                                                     | Default        | Notes                                            |
-| ------------------------------------------------------------ | -------------- | ------------------------------------------------ |
-| `AMQP_HOST` / `_PORT` / `_USERNAME` / `_PASSWORD` | —              | Connection settings; host required, port defaults to 5672                        |
+| Variable                                          | Default | Notes                                                     |
+| ------------------------------------------------- | ------- | --------------------------------------------------------- |
+| `AMQP_HOST` / `_PORT` / `_USERNAME` / `_PASSWORD` | —       | Connection settings; host required, port defaults to 5672 |
 
 The connection URL is built from these four settings using `amqp://` and the
 default virtual host `/`. Topology declaration is always enabled.

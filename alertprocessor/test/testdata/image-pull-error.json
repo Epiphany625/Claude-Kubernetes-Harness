@@ -1,0 +1,47 @@
+{
+  "version": "4",
+  "groupKey": "{}/{}:{alertname=\"PodImagePullError\", namespace=\"ckh-test\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "alertprocessor",
+  "groupLabels": {
+    "alertname": "PodImagePullError",
+    "namespace": "ckh-test"
+  },
+  "commonLabels": {
+    "alertname": "PodImagePullError",
+    "namespace": "ckh-test",
+    "pod": "nginx-deploy-5d4d596fff-pl5xf",
+    "container": "nginxm",
+    "reason": "ImagePullBackOff",
+    "severity": "warning",
+    "prometheus": "monitoring/monitoring-kube-prometheus-prometheus"
+  },
+  "commonAnnotations": {
+    "summary": "Pod nginx-deploy-5d4d596fff-pl5xf has an image pull error",
+    "description": "Container nginxm in pod nginx-deploy-5d4d596fff-pl5xf in namespace ckh-test cannot pull its container image. Reason: ImagePullBackOff."
+  },
+  "externalURL": "http://monitoring-kube-prometheus-alertmanager.monitoring:9093",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "PodImagePullError",
+        "namespace": "ckh-test",
+        "pod": "nginx-deploy-5d4d596fff-pl5xf",
+        "container": "nginxm",
+        "reason": "ImagePullBackOff",
+        "severity": "warning",
+        "prometheus": "monitoring/monitoring-kube-prometheus-prometheus"
+      },
+      "annotations": {
+        "summary": "Pod nginx-deploy-5d4d596fff-pl5xf has an image pull error",
+        "description": "Container nginxm in pod nginx-deploy-5d4d596fff-pl5xf in namespace ckh-test cannot pull its container image. Reason: ImagePullBackOff."
+      },
+      "startsAt": "2026-11-26T00:57:30.000Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus:9090/graph",
+      "fingerprint": "e5f6071829304a5b"
+    }
+  ]
+}

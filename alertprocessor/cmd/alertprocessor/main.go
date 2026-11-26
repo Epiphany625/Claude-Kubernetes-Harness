@@ -18,6 +18,7 @@ import (
 
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/config"
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/httpapi"
+	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/humanapproval"
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/obs"
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/processor"
 	"github.com/Epiphany625/Claude-Kubernetes-Harness/alertprocessor/internal/queue"
@@ -71,7 +72,9 @@ func run() error {
 
 	proc := processor.New(db, publisher, log)
 
-	srv := httpapi.New(cfg.HTTP, proc, map[string]httpapi.Pinger{
+	approver := humanapproval.NewApprover(db, publisher, log)
+
+	srv := httpapi.New(cfg.HTTP, proc, approver, map[string]httpapi.Pinger{
 		"postgres": db,
 		"rabbitmq": publisher,
 	}, log)

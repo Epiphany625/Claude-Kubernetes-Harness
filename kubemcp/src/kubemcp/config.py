@@ -40,7 +40,7 @@ class Settings(BaseSettings):
         default="0.0.0.0",  # noqa: S104 - a container must bind all interfaces
         description="Bind address. In a container this must be 0.0.0.0, not 127.0.0.1.",
     )
-    port: int = Field(default=8080, ge=1, le=65535)
+    port: int = Field(default=9700, ge=1, le=65535)
     mcp_path: str = Field(default="/mcp", description="Path the MCP endpoint is served at.")
 
     allowed_hosts: HostList = Field(
@@ -48,7 +48,7 @@ class Settings(BaseSettings):
         description=(
             "Host header allowlist for the transport's DNS-rebinding protection. "
             "MUST include the in-cluster Service name, e.g. "
-            "'kubemcp.default.svc.cluster.local:8080', or every request is rejected. "
+            "'kubemcp.default.svc.cluster.local:9700', or every request is rejected. "
             "Empty means 'allow any', which the server applies explicitly."
         ),
     )

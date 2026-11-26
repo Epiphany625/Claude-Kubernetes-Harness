@@ -25,6 +25,8 @@ type Config struct {
 type HTTPConfig struct {
 	Addr        string
 	WebhookPath string
+	// ApprovalPath receives human-in-the-loop decisions on paused sessions.
+	ApprovalPath string
 	// MaxBodyBytes caps a single webhook payload. A node failure can alert on
 	// hundreds of pods at once, so this is generous; it exists to bound memory,
 	// not to be a policy.
@@ -88,6 +90,7 @@ func Load() (*Config, error) {
 		HTTP: HTTPConfig{
 			Addr:            env("HTTP_ADDR", ":8080"),
 			WebhookPath:     env("WEBHOOK_PATH", "/api/v1/alerts"),
+			ApprovalPath:    env("APPROVAL_PATH", "/api/v1/approvals"),
 			MaxBodyBytes:    envInt64("MAX_BODY_BYTES", 8<<20, &errs), // 8 MiB
 			ReadTimeout:     envDuration("HTTP_READ_TIMEOUT", 15*time.Second, &errs),
 			WriteTimeout:    envDuration("HTTP_WRITE_TIMEOUT", 30*time.Second, &errs),
@@ -148,6 +151,13 @@ func Load() (*Config, error) {
 	}
 	if !strings.HasPrefix(cfg.HTTP.WebhookPath, "/") {
 		fail("%sWEBHOOK_PATH must start with '/', got %q", EnvPrefix, cfg.HTTP.WebhookPath)
+	}
+	if !strings.HasPrefix(cfg.HTTP.ApprovalPath, "/") {
+		fail("%sAPPROVAL_PATH must start with '/', got %q", EnvPrefix, cfg.HTTP.ApprovalPath)
+	}
+	if cfg.HTTP.ApprovalPath == cfg.HTTP.WebhookPath {
+		fail("%sAPPROVAL_PATH and %sWEBHOOK_PATH must differ, both are %q",
+			EnvPrefix, EnvPrefix, cfg.HTTP.ApprovalPath)
 	}
 	if cfg.HTTP.MaxBodyBytes < 1024 {
 		fail("%sMAX_BODY_BYTES must be at least 1024", EnvPrefix)

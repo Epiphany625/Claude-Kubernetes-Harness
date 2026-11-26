@@ -93,6 +93,7 @@ func (a AlertState) String() string { return string(a) }
 type Event struct {
 	EventID string `json:"event_id"`
 	AlertID string `json:"alert_id"`
+	SessionID string `json:"session_id,omitempty"`
 	Status  Status `json:"status"`
 
 	// AlertState is what Alertmanager said, unmodified.

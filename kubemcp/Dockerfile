@@ -47,10 +47,10 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     # A container must bind every interface; 127.0.0.1 would be unreachable
     # from another pod.
     KUBEMCP_HOST=0.0.0.0 \
-    KUBEMCP_PORT=8080
+    KUBEMCP_PORT=9700
 
 USER 65532:65532
-EXPOSE 8080
+EXPOSE 9700
 
 # Liveness and readiness are HTTP endpoints (/healthz, /readyz) so Kubernetes
 # probes them directly; no shell-based HEALTHCHECK is needed or wanted here.

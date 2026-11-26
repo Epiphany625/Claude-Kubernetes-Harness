@@ -14,7 +14,7 @@ not run on an amd64 node.
 Deployment manifests are in `ops/harness`: a single-replica Deployment and a
 Secret template. The pod gets its RabbitMQ credentials and `ANTHROPIC_API_KEY`
 from that Secret and its kubemcp address from `HARNESS_MCPSERVERS`, since the
-`127.0.0.1:8080` in `config/config.json` is a port-forward default that does
+`127.0.0.1:9700` in `config/config.json` is a port-forward default that does
 not resolve in a pod. There is no Service: the harness listens on nothing.
 
 Iterations:
@@ -30,3 +30,12 @@ Other Considerations:
 
 1. We might need a validator agent to confirm the alert sent by AlertManger is actually a problem (for example, it is very likely that the problem is already solved. )
 2. Maybe for a production-level Notifier, we need a dedicated database to store the interactions and use a webhook callback upon human approval. Shit. That means I need to support resuming from a break point? That would be very challenging.
+
+current issues:
+Declines go nowhere. The approver only logs a decline, so the event stays in waiting_human_approval forever. alertprocessor may only write waiting, so it should republish the event with a decision field. The harness can then mark it failed_to_resolve, or resume and tell the agent to find an option that doesn't write to the cluster.
+Approval covers the tool name only. Approving patch_resource lets the resumed session patch any resource. Show the arguments in the message at the very least. Consider matching the approval against the stored request arguments too.
+
+Need to think about:
+
+1. How to save parameters in the database as well?
+2.

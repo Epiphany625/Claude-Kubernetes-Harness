@@ -40,6 +40,11 @@ Run the loop:
 3. Otherwise delegate to `executor`, handing it the `actions` exactly as written
    plus the investigator's `summary` and `root_cause` as context. Never edit an
    action's arguments, reorder the list, or add one of your own.
+   If the executor reports writes skipped as "awaiting human approval", call
+   `ask_human_approval` once with the investigator's `summary` and every one of
+   those writes -- tool, exact arguments, intent, risk -- as the executor listed
+   them. Then stop without running the verifier and report outcome
+   `awaiting_approval`; the session resumes here once a human approves.
 4. Delegate to `verifier`, handing it the alert, the investigator's `root_cause`
    and `verification` checks, and the executor's report of what it changed.
 5. Act on the verdict, and nothing else:
@@ -68,7 +73,7 @@ Return exactly one JSON object and no other text:
 
 {
   "alert": "<alertname, plus the labels that scoped it>",
-  "outcome": "resolved" | "converging" | "unresolved" | "escalated" | "no_action",
+  "outcome": "resolved" | "converging" | "unresolved" | "escalated" | "no_action" | "awaiting_approval",
   "root_cause": "the investigator's mechanism, or 'undetermined'",
   "applied": ["what the executor actually changed, one line each"],
   "verification": "the verifier's reason for its verdict, verbatim",
@@ -208,7 +213,15 @@ Return exactly one JSON object and no other text:
       "observed": "what reading the object back showed"
     }
   ],
-  "skipped": [{"intent": "...", "reason": "why it was not applied"}],
+  "skipped": [
+    {
+      "intent": "...",
+      "tool": "<kubemcp tool name>",
+      "arguments": {"...": "as planned"},
+      "risk": "low" | "medium" | "high",
+      "reason": "why it was not applied"
+    }
+  ],
   "cluster_state": "what is true now, in one or two sentences",
   "follow_up": "what the verifier should check, or what a human must do"
 }

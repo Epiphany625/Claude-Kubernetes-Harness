@@ -3,7 +3,7 @@ from mcp import Client
 
 
 async def main():
-    async with Client("http://127.0.0.1:8080/mcp") as client:
+    async with Client("http://127.0.0.1:9700/mcp") as client:
         result = await client.call_tool(
             "describe_resource",
             {

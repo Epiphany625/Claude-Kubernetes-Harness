@@ -76,11 +76,11 @@ class TestEnvironment:
     def test_reads_the_kubemcp_prefix(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("KUBEMCP_PORT", "9999")
         monkeypatch.setenv("KUBEMCP_DEFAULT_NAMESPACE", "ckh-system")
-        monkeypatch.setenv("KUBEMCP_ALLOWED_HOSTS", "kubemcp.ckh.svc.cluster.local:8080")
+        monkeypatch.setenv("KUBEMCP_ALLOWED_HOSTS", "kubemcp.ckh.svc.cluster.local:9700")
         settings = Settings(_env_file=None)
         assert settings.port == 9999
         assert settings.default_namespace == "ckh-system"
-        assert settings.allowed_hosts == ["kubemcp.ckh.svc.cluster.local:8080"]
+        assert settings.allowed_hosts == ["kubemcp.ckh.svc.cluster.local:9700"]
 
     def test_ignores_unrelated_environment_variables(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("KUBEMCP_SOMETHING_UNKNOWN", "x")

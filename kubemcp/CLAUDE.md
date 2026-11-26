@@ -29,7 +29,7 @@ wheel before trusting recall — `uv run python -c "import mcp, inspect; ..."`.
 
 ```bash
 uv sync                                   # install, including dev deps
-uv run kubemcp                            # run (streamable HTTP on :8080)
+uv run kubemcp                            # run (streamable HTTP on :9700)
 uv run pytest                             # unit + integration; NO cluster needed
 uv run pytest -m e2e                      # live-cluster suite (needs minikube/kind)
 uv run ruff format . && uv run ruff check --fix .

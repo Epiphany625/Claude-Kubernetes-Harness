@@ -98,16 +98,16 @@ class TestTransportSecurity:
     def test_uses_the_configured_allowlist(self) -> None:
         settings = Settings(
             _env_file=None,
-            allowed_hosts="kubemcp.ckh.svc.cluster.local:8080,localhost:8080",
+            allowed_hosts="kubemcp.ckh.svc.cluster.local:9700,localhost:9700",
         )
         security = transport_security(settings)
         assert security.allowed_hosts == [
-            "kubemcp.ckh.svc.cluster.local:8080",
-            "localhost:8080",
+            "kubemcp.ckh.svc.cluster.local:9700",
+            "localhost:9700",
         ]
 
     def test_an_allowlisted_host_is_accepted(self, settings: Settings) -> None:
-        settings.allowed_hosts = ["kubemcp.ckh.svc.cluster.local:8080"]
+        settings.allowed_hosts = ["kubemcp.ckh.svc.cluster.local:9700"]
         app = build_server(settings, kube=None).streamable_http_app(
             stateless_http=True,
             json_response=True,
@@ -117,7 +117,7 @@ class TestTransportSecurity:
             response = client.post(
                 "/mcp",
                 headers={
-                    "Host": "kubemcp.ckh.svc.cluster.local:8080",
+                    "Host": "kubemcp.ckh.svc.cluster.local:9700",
                     "Content-Type": "application/json",
                     "Accept": "application/json, text/event-stream",
                 },
@@ -126,7 +126,7 @@ class TestTransportSecurity:
         assert response.status_code != 421
 
     def test_a_host_outside_the_allowlist_is_rejected(self, settings: Settings) -> None:
-        settings.allowed_hosts = ["kubemcp.ckh.svc.cluster.local:8080"]
+        settings.allowed_hosts = ["kubemcp.ckh.svc.cluster.local:9700"]
         app = build_server(settings, kube=None).streamable_http_app(
             stateless_http=True,
             json_response=True,
