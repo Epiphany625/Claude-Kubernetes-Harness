@@ -17,6 +17,16 @@ KUBEMCP_READ_TOOLS: Final = set(
         ]
 )
 
+KUBEMCP_APPROVAL_TOOLS: Final = {
+    "mcp__kubemcp__create_resource",
+    "mcp__kubemcp__apply_resource",
+    "mcp__kubemcp__patch_resource",
+    "mcp__kubemcp__delete_resource",
+    "mcp__kubemcp__scale_resource",
+    "mcp__kubemcp__rollout_restart",
+    "mcp__kubemcp__exec_in_pod",
+}
+
 # The Agent SDK takes custom tools only through an in-process MCP server, so
 # Claude sees this tool as mcp__approval__ask_human_approval.
 APPROVAL_SERVER_NAME: Final = "approval"

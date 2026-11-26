@@ -21,7 +21,7 @@
   "mcpServers": {
     "kubemcp": {
       "type": "http",
-      "url": "http://127.0.0.1:8080/mcp",
+      "url": "http://127.0.0.1:9700/mcp",
       "headers": {}
     }
   },
@@ -92,12 +92,12 @@
   },
   "notifiers": {
     "email": {
-      "user": "",
+      "user": "leoxu16603873917@gmail.com",
       "password": "",
-      "to": "",
+      "to": "xinyangx@usc.edu",
       "approvalURL": "http://localhost:8080/api/v1/approvals",
-      "smtpHost": "",
-      "smtpPort": 465,
+      "smtpHost": "smtp.gmail.com",
+      "smtpPort": 587,
       "smtpTimeout": 10
     }
   }

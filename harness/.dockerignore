@@ -1,0 +1,23 @@
+# The local virtualenv holds a macOS build of the bundled Claude Code binary --
+# several hundred megabytes that would be copied into the build context only to
+# be overwritten by the linux one the builder stage resolves.
+.venv/
+
+# Local secrets. HARNESS_AMQP_USERNAME and HARNESS_AMQP_PASSWORD come from the
+# Secret in the cluster, never from a file baked into the image.
+.env
+.envrc
+
+__pycache__/
+*.py[cod]
+
+# Developer-only surface: none of it is imported by main.py.
+tests/
+schemas/
+demo.py
+.claude/
+.python-version
+README.md
+
+Dockerfile
+.dockerignore

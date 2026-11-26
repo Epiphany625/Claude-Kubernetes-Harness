@@ -22,7 +22,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync                 # install
-uv run kubemcp          # serve streamable HTTP on 0.0.0.0:8080/mcp
+uv run kubemcp          # serve streamable HTTP on 0.0.0.0:9700/mcp
 ```
 
 Credentials are resolved in this order: `KUBEMCP_KUBECONFIG` if set → the pod's
@@ -38,7 +38,7 @@ from mcp import Client
 
 
 async def main():
-    async with Client("http://127.0.0.1:8080/mcp") as client:
+    async with Client("http://127.0.0.1:9700/mcp") as client:
         result = await client.call_tool(
             "describe_resource",
             {
@@ -162,7 +162,7 @@ either a comma-separated string or JSON, so Helm values work directly.
 | --------------------------------- | ----------------- | ---------------------------------------------------------------- |
 | `KUBEMCP_TRANSPORT`               | `streamable-http` | `streamable-http` or `stdio`.                                    |
 | `KUBEMCP_HOST`                    | `0.0.0.0`         | Bind address. Must not be `127.0.0.1` in a container.            |
-| `KUBEMCP_PORT`                    | `8080`            | Listen port.                                                     |
+| `KUBEMCP_PORT`                    | `9700`            | Listen port.                                                     |
 | `KUBEMCP_MCP_PATH`                | `/mcp`            | Path the MCP endpoint is served at.                              |
 | **`KUBEMCP_ALLOWED_HOSTS`**       | _(empty = any)_   | **Host header allowlist — see below.**                           |
 | `KUBEMCP_ALLOWED_ORIGINS`         | _(empty = any)_   | Origin allowlist; only matters for browser callers.              |
@@ -261,13 +261,13 @@ the outcome.
 
 ```bash
 docker build -t kubemcp:dev .
-docker run --rm -p 8080:8080 \
-  -e KUBEMCP_ALLOWED_HOSTS="127.0.0.1:8080,localhost:8080" \
+docker run --rm -p 9700:9700 \
+  -e KUBEMCP_ALLOWED_HOSTS="127.0.0.1:9700,localhost:9700" \
   -e KUBEMCP_KUBECONFIG=/kube/config \
   -v "$HOME/.kube:/kube:ro" \
   kubemcp:dev
 
-curl localhost:8080/healthz
+curl localhost:9700/healthz
 ```
 
 Multi-stage build: `uv sync --frozen --no-dev` into a virtualenv, then a

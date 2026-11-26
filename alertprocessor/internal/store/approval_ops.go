@@ -25,7 +25,7 @@ ON CONFLICT (session_id) DO UPDATE
         ORDER BY n
     )
     WHERE approval.event_id = EXCLUDED.event_id
-RETURNING id
+RETURNING session_id
 `
 
 // ApproveTools implements Store.
@@ -33,8 +33,8 @@ func (s *PostgresStore) ApproveTools(ctx context.Context, eventID, sessionID str
 	ctx, cancel := context.WithTimeout(ctx, s.queryTimeout)
 	defer cancel()
 
-	var id string
-	err := s.pool.QueryRow(ctx, approveToolsSQL, eventID, sessionID, dedupe(tools)).Scan(&id)
+	var stored string
+	err := s.pool.QueryRow(ctx, approveToolsSQL, eventID, sessionID, dedupe(tools)).Scan(&stored)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("approve tools %v for session %s on event %s: %w",
 			tools, sessionID, eventID, ErrApprovalConflict)

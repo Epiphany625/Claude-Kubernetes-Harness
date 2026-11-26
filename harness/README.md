@@ -14,7 +14,7 @@ not run on an amd64 node.
 Deployment manifests are in `ops/harness`: a single-replica Deployment and a
 Secret template. The pod gets its RabbitMQ credentials and `ANTHROPIC_API_KEY`
 from that Secret and its kubemcp address from `HARNESS_MCPSERVERS`, since the
-`127.0.0.1:8080` in `config/config.json` is a port-forward default that does
+`127.0.0.1:9700` in `config/config.json` is a port-forward default that does
 not resolve in a pod. There is no Service: the harness listens on nothing.
 
 Iterations:

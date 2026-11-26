@@ -3,6 +3,7 @@ from typing import Final
 import psycopg
 
 from config.config import PostgresConfig
+from abc import ABC, abstractmethod
 from mq.event import Status
 
 # The event and approval tables are owned by alertprocessor's migrations.
@@ -17,8 +18,18 @@ UPDATE event SET status = %s, updated_at = now()
 GET_APPROVED_TOOLS_SQL: Final = """
 SELECT approved_tools FROM approval WHERE session_id = %s::uuid"""
 
+class PostgresClientABC(ABC):
+    @abstractmethod
+    async def insertSessionID(self, eventID: str, sessionID: str) -> None:...
+    
+    @abstractmethod
+    async def updateEventState(self, eventID: str, newState: Status) -> None:...
+    
+    @abstractmethod
+    async def getApprovedTools(self, sessionID: str) -> set[str]:...
+    
 
-class PostgresClient:
+class PostgresClient(PostgresClientABC):
     def __init__(self, config: PostgresConfig):
         self.dsn = config.dsn
         self.connectTimeout = config.connectTimeout

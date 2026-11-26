@@ -1,6 +1,6 @@
 from claude_agent_sdk import ClaudeAgentOptions, query, ToolPermissionContext, AssistantMessage, UserMessage, TextBlock, ResultMessage, PermissionResultAllow, PermissionResultDeny, ToolUseBlock, ToolResultBlock, AgentDefinition, HookMatcher
 from mq.event import AlertState, Event, Status
-from postgres.postgres import PostgresClient
+from postgres.postgres import PostgresClientABC
 from notifier.notifier import NotifierSet
 from textwrap import shorten
 import config.config as config
@@ -11,17 +11,36 @@ from typing import Any, Callable
 import dataclasses
 import asyncio
 import uuid
+from contextlib import suppress
 from .tools import *
 
 def preview(value: object) -> str:
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
     return shorten(text, width=240, placeholder=" …")
 
+def report_outcome(result: str | None) -> str | None:
+    """The `outcome` of the orchestrator's JSON report, or None when the result is not one.
+
+    With background subagents a run yields several ResultMessages; only the last
+    carries the report, the earlier ones are progress notes.
+    """
+    if not result:
+        return None
+    start, end = result.find("{"), result.rfind("}")
+    if start == -1 or end < start:
+        return None
+    try:
+        report = json.loads(result[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+    outcome = report.get("outcome") if isinstance(report, dict) else None
+    return outcome if isinstance(outcome, str) else None
+
 # hook that prevents kubectl writes until a human-in-the-loop approves. 
 def guard_hook():
     pass
 class AgentService:
-    def __init__(self, config: config.AgentOptionsConfig, taskQueue: asyncio.Queue[Event], pgClient: PostgresClient, notifierSet: NotifierSet, sanity_check: bool = True):
+    def __init__(self, config: config.AgentOptionsConfig, taskQueue: asyncio.Queue[Event], pgClient: PostgresClientABC, notifierSet: NotifierSet):
         self.agentOptions = ClaudeAgentOptions(
             tools=[*config.tools, *APPROVAL_TOOLS],
             allowed_tools=[*config.allowed_tools, *APPROVAL_TOOLS],
@@ -43,8 +62,7 @@ class AgentService:
         )
         self.logger = config.logger
         self.taskQueue = taskQueue
-        self.worker = config.worker # number of workers. 
-        self.sanity_check = sanity_check
+        self.worker = config.worker # number of workers.
         self.pgClient = pgClient
         self.notifierSet = notifierSet
 
@@ -64,8 +82,7 @@ class AgentService:
                 elif tool_name in await self.pgClient.getApprovedTools(sessionID):
                     return PermissionResultAllow(updated_input=tool_input)
                 else:
-                    print("_________permission result deny triggered for write tools")
-
+                    self.logger.info(f"[agent] {tool_name} denied: awaiting human approval")
                     return PermissionResultDeny(message=(
                         f"{tool_name} writes to the cluster and needs human approval; it was not run. "
                         "Stop now: make no further writes and do not look for a workaround. "
@@ -84,8 +101,6 @@ class AgentService:
         return can_use_tool
 
     async def _start_agent(self):
-        if self.sanity_check:
-            return await self._handle_event()
         while True:
             event = await self.taskQueue.get()
             try:
@@ -97,9 +112,7 @@ class AgentService:
             finally:
                 self.taskQueue.task_done()
 
-    def _prompt_for(self, event: Event | None) -> str:
-        if event is None:
-            return "there is an image pull error in default namespace. fix"
+    def _prompt_for(self, event: Event) -> str:
         # A sessionID means this event resumes a run that stopped for approval.
         # The session already holds the alert and the proposed write, so the
         # prompt only needs to say that the human approved it.
@@ -115,27 +128,25 @@ class AgentService:
             f"{event.describe()}\n"
         )
 
-    async def _handle_event(self, event: Event | None = None):
+    async def _handle_event(self, event: Event):
         prompt = self._prompt_for(event)
-
-        print(prompt)
-        
         tool_names: dict[str, str] = {}
-        self.logger.info(f"prompt: \n {prompt}")
-        
+
         # No session ID means a fresh event: create one and record it. Otherwise the
         # event was republished after a human approval and resumes that session.
-        resume = event.sessionID if event is not None else ""
+        resume = event.sessionID
         sessionID = resume or str(uuid.uuid4())
-        if event is not None and not resume:
+        if not resume:
             await self.pgClient.insertSessionID(event.eventID, sessionID)
+        await self.pgClient.updateEventState(event.eventID, Status.SOLVING)
+        self.logger.info(f"[agent] event {event.eventID}: {'resuming' if resume else 'new'} session {sessionID}")
+        self.logger.debug(f"[agent] prompt:\n{prompt}")
 
-        eventID = event.eventID if event is not None else ""
         options = dataclasses.replace(
                 self.agentOptions,
                 mcp_servers={
                     **self.agentOptions.mcp_servers,
-                    APPROVAL_SERVER_NAME: approval_server_for(self.notifierSet, eventID, sessionID),
+                    APPROVAL_SERVER_NAME: approval_server_for(self.notifierSet, event.eventID, sessionID),
                 },
                 can_use_tool=self._callback_for(self.require_approval, sessionID),
                 # The CLI rejects --session-id together with --resume.
@@ -143,36 +154,52 @@ class AgentService:
                 session_id=None if resume else sessionID,
         )
 
-        async for message in query(prompt=prompt, options=options):
-            if isinstance(message, (AssistantMessage, UserMessage)):
-                if isinstance(message, AssistantMessage) and message.error:
-                    self.logger.info(f"[error] {message.error}")
-                if isinstance(message.content, str):
-                    continue
-                for block in message.content:
-                    if isinstance(block, TextBlock) and isinstance(message, AssistantMessage):
-                        label = "subagent" if message.parent_tool_use_id else "assistant"
-                        self.logger.info(f"[{label}] {preview(block.text)}")
-                    elif isinstance(block, ToolUseBlock):
-                        tool_names[block.id] = block.name
-                        self.logger.info(f"[tool] {block.name}: {preview(block.input)}")
-                    elif isinstance(block, ToolResultBlock):
-                        name = tool_names.pop(block.tool_use_id, "tool")
-                        status = "error" if block.is_error else "ok"
-                        self.logger.info(f"[{status}] {name}: {preview(block.content)}")
-            elif isinstance(message, ResultMessage):
-                self.logger.info("\nResponse:")
-                self.logger.info(message.result or "No response returned.")
-                if message.errors:
-                    self.logger.info("Errors: " + "; ".join(message.errors))
-                status = "Error" if message.is_error else "Done"
-                summary = (
-                    f"{status} | turns: {message.num_turns}"
-                    f" | time: {message.duration_ms / 1000:.1f}s"
-                )
-                if message.total_cost_usd is not None:
-                    summary += f" | cost: ${message.total_cost_usd:.4f}"
-                self.logger.info(summary)
+        outcome: str | None = None
+        # Once a human has been asked, the status belongs to the approval flow.
+        approvalRequested = False
+        try:
+            async for message in query(prompt=prompt, options=options):
+                if isinstance(message, (AssistantMessage, UserMessage)):
+                    if isinstance(message, AssistantMessage) and message.error:
+                        self.logger.info(f"[error] {message.error}")
+                    if isinstance(message.content, str):
+                        continue
+                    for block in message.content:
+                        if isinstance(block, TextBlock) and isinstance(message, AssistantMessage):
+                            label = "subagent" if message.parent_tool_use_id else "assistant"
+                            self.logger.info(f"[{label}] {preview(block.text)}")
+                        elif isinstance(block, ToolUseBlock):
+                            tool_names[block.id] = block.name
+                            self.logger.info(f"[tool] {block.name}: {preview(block.input)}")
+                        elif isinstance(block, ToolResultBlock):
+                            name = tool_names.pop(block.tool_use_id, "tool")
+                            self.logger.info(f"[{'error' if block.is_error else 'ok'}] {name}: {preview(block.content)}")
+                            if name == ASK_HUMAN_APPROVAL_TOOL and not block.is_error and not approvalRequested:
+                                approvalRequested = True
+                                await self.pgClient.updateEventState(event.eventID, Status.WAITING_HUMAN_APPROVAL)
+                elif isinstance(message, ResultMessage):
+                    outcome = report_outcome(message.result) or outcome
+                    summary = (
+                        f"[result] {'error' if message.is_error else 'done'} | turns: {message.num_turns}"
+                        f" | time: {message.duration_ms / 1000:.1f}s"
+                    )
+                    if message.total_cost_usd is not None:
+                        summary += f" | cost: ${message.total_cost_usd:.4f}"
+                    self.logger.info(f"{summary}\n{message.result or 'No response returned.'}")
+                    if message.errors:
+                        self.logger.info("[result] errors: " + "; ".join(message.errors))
+        except Exception:
+            if not approvalRequested:
+                with suppress(Exception):
+                    await self.pgClient.updateEventState(event.eventID, Status.FAILED_TO_RESOLVE)
+            raise
+
+        if approvalRequested:
+            self.logger.info(f"[agent] event {event.eventID}: outcome={outcome}, status={Status.WAITING_HUMAN_APPROVAL}")
+            return
+        final = Status.RESOLVED if outcome == "resolved" else Status.FAILED_TO_RESOLVE
+        await self.pgClient.updateEventState(event.eventID, final)
+        self.logger.info(f"[agent] event {event.eventID}: outcome={outcome}, status={final}")
 
 
     async def start(self) -> None:
