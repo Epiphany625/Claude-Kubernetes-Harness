@@ -100,5 +100,11 @@
       "smtpPort": 587,
       "smtpTimeout": 10
     }
+  },
+  "langfuse": {
+    "enabled": true,
+    "publickey": "",
+    "privatekey": "",
+    "baseurl": ""
   }
 }

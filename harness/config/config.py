@@ -79,6 +79,13 @@ class NotifiersConfig:
     # None when notifiers.email.smtpHost is unset.
     email: Optional[EmailNotifierConfig]
 
+@dataclass
+class LangfuseConfig:
+    enabled: bool
+    publicKey: str
+    privateKey: str
+    baseUrl: str
+
 def load_value(key: str, default_value: Any = None) -> Any:
     """Look up a dotted key in the environment, then JSON, then the default.
 
@@ -259,12 +266,37 @@ def build_notifiers(require_approval: bool) -> NotifiersConfig:
         raise ValueError("policies.requireapproval is set, so notifiers.email.smtpHost must be set")
     return notifiers
 
+def build_langfuse() -> LangfuseConfig:
+    """Build Langfuse settings; keys are only required when tracing is enabled."""
+    enabled = load_value("langfuse.enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError("langfuse.enabled must be a boolean")
+
+    publicKey = str(load_value("langfuse.publickey", ""))
+    privateKey = str(load_value("langfuse.privatekey", ""))
+    baseUrl = str(load_value("langfuse.baseurl", "") or "https://cloud.langfuse.com")
+    if enabled:
+        if not publicKey:
+            raise ValueError("langfuse.enabled is set, so langfuse.publickey must be set")
+        if not privateKey:
+            raise ValueError("langfuse.enabled is set, so langfuse.privatekey must be set")
+        if not baseUrl.startswith(("http://", "https://")):
+            raise ValueError("langfuse.baseurl must be an http:// or https:// URL")
+
+    return LangfuseConfig(
+        enabled=enabled,
+        publicKey=publicKey,
+        privateKey=privateKey,
+        baseUrl=baseUrl,
+    )
+
 @dataclass
 class HarnessConfig:
     rabbitMQConfig: RabbitMQConfig
     agentOptionsConfig: AgentOptionsConfig
     postgresConfig: PostgresConfig
     notifiersConfig: NotifiersConfig
+    langfuseConfig: LangfuseConfig
 
 def load_config() -> HarnessConfig:
 
@@ -278,4 +310,5 @@ def load_config() -> HarnessConfig:
         agentOptionsConfig=agentOptionsConfig,
         postgresConfig=build_postgres(postgresLogger),
         notifiersConfig=build_notifiers(agentOptionsConfig.require_approval),
+        langfuseConfig=build_langfuse(),
     )

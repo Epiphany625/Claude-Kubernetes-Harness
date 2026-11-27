@@ -1,10 +1,11 @@
-from claude_agent_sdk import ClaudeAgentOptions, query, ToolPermissionContext, AssistantMessage, UserMessage, TextBlock, ResultMessage, PermissionResultAllow, PermissionResultDeny, ToolUseBlock, ToolResultBlock, AgentDefinition, HookMatcher
+from claude_agent_sdk import ClaudeAgentOptions, query, ToolPermissionContext, AssistantMessage, UserMessage, TextBlock, ResultMessage, PermissionResultAllow, Message, PermissionResultDeny, ToolUseBlock, ToolResultBlock, AgentDefinition, HookMatcher
 from mq.event import AlertState, Event, Status
 from postgres.postgres import PostgresClient
 from notifier.notifier import NotifierSet
 from textwrap import shorten
 import config.config as config
 import json
+from langfuse import Langfuse, LangfuseTool, observe, propagate_attributes
 
 from typing import Any, Callable
 
@@ -18,29 +19,33 @@ def preview(value: object) -> str:
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
     return shorten(text, width=240, placeholder=" …")
 
-def report_outcome(result: str | None) -> str | None:
-    """The `outcome` of the orchestrator's JSON report, or None when the result is not one.
+def report_status(result: str | None) -> Status:
+    """The `status` of the orchestrator's JSON report, or UNKNOWN when the result is not one
+    or the status is not a Status value.
 
     With background subagents a run yields several ResultMessages; only the last
     carries the report, the earlier ones are progress notes.
     """
     if not result:
-        return None
+        return Status.UNKNOWN
     start, end = result.find("{"), result.rfind("}")
     if start == -1 or end < start:
-        return None
+        return Status.UNKNOWN
     try:
         report = json.loads(result[start:end + 1])
     except json.JSONDecodeError:
-        return None
-    outcome = report.get("outcome") if isinstance(report, dict) else None
-    return outcome if isinstance(outcome, str) else None
+        return Status.UNKNOWN
+    status = report.get("status") if isinstance(report, dict) else None
+    try:
+        return Status(status)
+    except ValueError:
+        return Status.UNKNOWN
 
 # hook that prevents kubectl writes until a human-in-the-loop approves. 
 def guard_hook():
     pass
 class AgentService:
-    def __init__(self, config: config.AgentOptionsConfig, taskQueue: asyncio.Queue[Event], pgClient: PostgresClient, notifierSet: NotifierSet):
+    def __init__(self, config: config.AgentOptionsConfig, taskQueue: asyncio.Queue[Event], pgClient: PostgresClient, notifierSet: NotifierSet, langfuse: Langfuse):
         self.agentOptions = ClaudeAgentOptions(
             tools=[*config.tools, *APPROVAL_TOOLS],
             allowed_tools=[*config.allowed_tools, *APPROVAL_TOOLS],
@@ -65,6 +70,7 @@ class AgentService:
         self.worker = config.worker # number of workers.
         self.pgClient = pgClient
         self.notifierSet = notifierSet
+        self.langfuse = langfuse
 
         self.require_approval = config.require_approval # answers: does this run require human approval for write tools? 
 
@@ -127,10 +133,10 @@ class AgentService:
             "fix this error / issue sent through alertmanager:\n\n"
             f"{event.describe()}\n"
         )
-
+    
+    @observe(as_type="agent", name="claude_agent")
     async def _handle_event(self, event: Event):
         prompt = self._prompt_for(event)
-        tool_names: dict[str, str] = {}
 
         # No session ID means a fresh event: create one and record it. Otherwise the
         # event was republished after a human approval and resumes that session.
@@ -139,8 +145,8 @@ class AgentService:
         if not resume:
             await self.pgClient.eventStore.insertSessionID(event.eventID, sessionID)
         await self.pgClient.eventStore.updateEventState(event.eventID, Status.SOLVING)
-        self.logger.info(f"[agent] event {event.eventID}: {'resuming' if resume else 'new'} session {sessionID}")
-        self.logger.debug(f"[agent] prompt:\n{prompt}")
+        # self.logger.info(f"[agent] event {event.eventID}: {'resuming' if resume else 'new'} session {sessionID}")
+        # self.logger.debug(f"[agent] prompt:\n{prompt}")
 
         options = dataclasses.replace(
                 self.agentOptions,
@@ -155,52 +161,86 @@ class AgentService:
                 session_id=None if resume else sessionID,
         )
 
-        outcome: str | None = None
-        # Once a human has been asked, the status belongs to the approval flow.
-        approvalRequested = False
+        # Tool observations open on ToolUseBlock and close on the matching ToolResultBlock,
+        # which arrives in a later message; keyed by tool_use_id, scoped to this event.
+        tools: dict[str, LangfuseTool] = {}
+        status: Status | None = None
         try:
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, (AssistantMessage, UserMessage)):
-                    if isinstance(message, AssistantMessage) and message.error:
-                        self.logger.info(f"[error] {message.error}")
-                    if isinstance(message.content, str):
-                        continue
-                    for block in message.content:
-                        if isinstance(block, TextBlock) and isinstance(message, AssistantMessage):
-                            label = "subagent" if message.parent_tool_use_id else "assistant"
-                            self.logger.info(f"[{label}] {preview(block.text)}")
-                        elif isinstance(block, ToolUseBlock):
-                            tool_names[block.id] = block.name
-                            self.logger.info(f"[tool] {block.name}: {preview(block.input)}")
-                        elif isinstance(block, ToolResultBlock):
-                            name = tool_names.pop(block.tool_use_id, "tool")
-                            self.logger.info(f"[{'error' if block.is_error else 'ok'}] {name}: {preview(block.content)}")
-                            if name == ASK_HUMAN_APPROVAL_TOOL and not block.is_error and not approvalRequested:
-                                approvalRequested = True
-                                await self.pgClient.eventStore.updateEventState(event.eventID, Status.WAITING_HUMAN_APPROVAL)
-                elif isinstance(message, ResultMessage):
-                    outcome = report_outcome(message.result) or outcome
-                    summary = (
-                        f"[result] {'error' if message.is_error else 'done'} | turns: {message.num_turns}"
-                        f" | time: {message.duration_ms / 1000:.1f}s"
-                    )
-                    if message.total_cost_usd is not None:
-                        summary += f" | cost: ${message.total_cost_usd:.4f}"
-                    self.logger.info(f"{summary}\n{message.result or 'No response returned.'}")
-                    if message.errors:
-                        self.logger.info("[result] errors: " + "; ".join(message.errors))
+            # A resumed run shares the sessionID, so both traces land in one Langfuse session.
+            with propagate_attributes(session_id=sessionID):
+                async for message in query(prompt=prompt, options=options):
+                    self._process_tool_use(message, tools)
+                    status = await self._process_generation_message(event.eventID, message, tools) or status
         except Exception:
-            if not approvalRequested:
+            # Once a human has been asked, the status belongs to the approval flow.
+            if status != Status.WAITING_HUMAN_APPROVAL:
                 with suppress(Exception):
                     await self.pgClient.eventStore.updateEventState(event.eventID, Status.FAILED_TO_RESOLVE)
             raise
+        finally:
+            for obs in tools.values():
+                obs.update(level="WARNING", status_message="no tool result").end()
 
-        if approvalRequested:
-            self.logger.info(f"[agent] event {event.eventID}: outcome={outcome}, status={Status.WAITING_HUMAN_APPROVAL}")
+    def _process_tool_use(self, message: Message, tools: dict[str, LangfuseTool]):
+        if not isinstance(message, (AssistantMessage, UserMessage)) or isinstance(message.content, str):
             return
-        final = Status.RESOLVED if outcome == "resolved" else Status.FAILED_TO_RESOLVE
-        await self.pgClient.eventStore.updateEventState(event.eventID, final)
-        self.logger.info(f"[agent] event {event.eventID}: outcome={outcome}, status={final}")
+        for block in message.content:
+            if isinstance(block, ToolUseBlock):
+                # Subagent tool calls nest under the Task/Agent tool that spawned them.
+                parent = tools.get(message.parent_tool_use_id) or self.langfuse
+                tools[block.id] = parent.start_observation(
+                    name=block.name,
+                    as_type="tool",
+                    input=block.input,
+                    metadata={"tool_use_id": block.id},
+                )
+            elif isinstance(block, ToolResultBlock):
+                obs = tools.pop(block.tool_use_id, None)
+                if obs:
+                    obs.update(
+                        output=block.content,
+                        level="ERROR" if block.is_error else None,
+                    ).end()
+
+    async def _process_generation_message(self, eventId: str, message: Message, tools: dict[str, LangfuseTool]) -> Status | None:
+        """Record the message in Langfuse; return the event status it wrote, if any."""
+        if isinstance(message, AssistantMessage):
+            if message.error:
+                self.logger.info(f"[error] {message.error}")
+            text = "".join(b.text for b in message.content if isinstance(b, TextBlock))
+            if not text:
+                return None
+            # Subagent generations nest under the Task/Agent tool that spawned them.
+            parent = tools.get(message.parent_tool_use_id) or self.langfuse
+            parent.start_observation(
+                name="claude-subagent" if message.parent_tool_use_id else "claude-agent",
+                as_type="generation",
+                model=message.model,
+                output=text,
+                level="ERROR" if message.error else None,
+                metadata={"message_id": message.message_id, "stop_reason": message.stop_reason},
+            ).end()
+        elif isinstance(message, ResultMessage):
+            eventStatus = report_status(message.result)
+            if eventStatus != Status.UNKNOWN:
+                await self.pgClient.eventStore.updateEventState(eventId, eventStatus)
+            self.langfuse.start_observation(
+                name="claude-agent-result",
+                as_type="generation",
+                model=self.agentOptions.model,
+                output=message.result,
+                metadata={**(message.model_usage or {}), 
+                    "turns": message.num_turns,
+                    "time": message.duration_ms / 1000,
+                },
+                cost_details={
+                    "cost": message.total_cost_usd,
+                },
+                level="ERROR" if message.is_error else None,
+                status_message=eventStatus,
+            ).end()
+            return eventStatus
+        return None
 
 
     async def start(self) -> None:

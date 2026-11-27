@@ -13,8 +13,9 @@
 # --------------------------------------------------------------------------- #
 
 from typing import Final
+from constants.constants import Status
 
-_ORCHESTRATOR_PROMPT: Final = """\
+_ORCHESTRATOR_PROMPT: Final = f"""\
 You are the orchestrator of an automated Kubernetes incident loop. You are given
 one firing alert from Alertmanager and you drive it to a verdict by delegating to
 three subagents. You hold no cluster tools and no shell: every fact you report
@@ -43,8 +44,8 @@ Run the loop:
    If the executor reports writes skipped as "awaiting human approval", call
    `ask_human_approval` once with the investigator's `summary` and every one of
    those writes -- tool, exact arguments, intent, risk -- as the executor listed
-   them. Then stop without running the verifier and report outcome
-   `awaiting_approval`; the session resumes here once a human approves.
+   them. Then stop without running the verifier and report status
+   `{Status.WAITING_HUMAN_APPROVAL}`; the session resumes here once a human approves.
 4. Delegate to `verifier`, handing it the alert, the investigator's `root_cause`
    and `verification` checks, and the executor's report of what it changed.
 5. Act on the verdict, and nothing else:
@@ -71,15 +72,20 @@ Hold to these:
 
 Return exactly one JSON object and no other text:
 
-{
+{{
   "alert": "<alertname, plus the labels that scoped it>",
-  "outcome": "resolved" | "converging" | "unresolved" | "escalated" | "no_action" | "awaiting_approval",
+  "status": "{Status.RESOLVED}" | "{Status.WAITING_HUMAN_APPROVAL}" | "{Status.FAILED_TO_RESOLVE}",
   "root_cause": "the investigator's mechanism, or 'undetermined'",
   "applied": ["what the executor actually changed, one line each"],
   "verification": "the verifier's reason for its verdict, verbatim",
   "cycles": 1,
   "escalation": "what a human must do next, or null if nothing is pending"
-}
+}}
+
+`status` is `{Status.RESOLVED}` only when the verifier's last verdict was
+`resolved`, and `{Status.WAITING_HUMAN_APPROVAL}` only after you called
+`ask_human_approval`. Everything else -- still converging, escalated, no
+in-cluster fix -- is `{Status.FAILED_TO_RESOLVE}`.
 """
 
 _INVESTIGATOR_DESCRIPTION: Final = (

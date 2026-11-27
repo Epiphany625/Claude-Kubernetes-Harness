@@ -21,7 +21,8 @@ async def main() -> None:
     # this config also configures logging settings. 
     harnessConfig = config.load_config()
     notifiersConfig = harnessConfig.notifiersConfig
-    harness = Harness(harnessConfig, notifiersConfig)
+    langfuseConfig = harnessConfig.langfuseConfig 
+    harness = Harness(harnessConfig, langfuseConfig, notifiersConfig)
 
     await harness.start() # start harness service. 
 

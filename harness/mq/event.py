@@ -14,46 +14,11 @@ therefore unrelated, and one alert yields several events over its life.
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from enum import StrEnum
 from typing import Any, Mapping
+from enum import StrEnum
+from constants.constants import Status, AlertState, parseEnum
 
 
-class Status(StrEnum):
-    """Lifecycle state of an event -- what the harness has done about it.
-
-    alertprocessor only ever writes WAITING; every later transition belongs to
-    this service. The spellings are a cross-service contract, constrained by the
-    event_status_valid CHECK in the producer's 0001_event.sql.
-    """
-
-    WAITING = "waiting"
-    SOLVING = "solving"
-    WAITING_HUMAN_APPROVAL = "waiting_human_approval"
-    RESOLVED = "resolved"
-    FAILED_TO_RESOLVE = "failed_to_resolve"
-
-
-class AlertState(StrEnum):
-    """Firing/resolved state as Alertmanager reported it -- what the world is
-    doing, as opposed to Status, which is what we are doing about it. An alert
-    can be resolved in Prometheus while its event is still SOLVING."""
-
-    FIRING = "firing"
-    RESOLVED = "resolved"
-
-
-def _parseEnum(enum: type[StrEnum], value: Any) -> Any:
-    """Coerce to a known member, else hand back the raw string.
-
-    A value we do not recognise is a vocabulary that grew without us. That is
-    worth seeing in a log line, and not worth dropping the message over.
-    """
-    if not isinstance(value, str):
-        return ""
-    try:
-        return enum(value)
-    except ValueError:
-        return value
 
 
 def _parseTime(value: Any) -> datetime | None:
@@ -129,9 +94,9 @@ class Event:
         return cls(
             eventID=_parseText(payload.get("event_id")),
             alertID=_parseText(payload.get("alert_id")),
-            status=_parseEnum(Status, payload.get("status")),
+            status=parseEnum(Status, payload.get("status")),
             # The wire name is alert_status; the producer's field is AlertState.
-            alertState=_parseEnum(AlertState, payload.get("alert_status")),
+            alertState=parseEnum(AlertState, payload.get("alert_status")),
             alertName=_parseText(payload.get("alert_name")),
             severity=_parseText(payload.get("severity")),
             namespace=_parseText(payload.get("namespace")),

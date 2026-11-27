@@ -5,6 +5,7 @@ from mq.event import Event
 from postgres.postgres import PostgresClient
 from notifier.notifier import Notifier, NotifierSet
 from notifier.email_notifier import EmailNotifier
+from langfuse import Langfuse
 
 import asyncio
 from logging import Logger
@@ -12,7 +13,7 @@ import sys
 
 class Harness:
     logger: Logger
-    def __init__(self, harnessConfig: HarnessConfig, notifiersConfig: NotifiersConfig):
+    def __init__(self, harnessConfig: HarnessConfig, langfuseConfig: LangfuseConfig, notifiersConfig: NotifiersConfig):
         # a task queue for agentService to consume and rabbitmq service to produce.
         self.taskQueue = asyncio.Queue[Event](maxsize=100)
 
@@ -29,10 +30,18 @@ class Harness:
         if emailConfig is not None:
             notifiers.append(EmailNotifier(emailConfig))
         notifierSet = NotifierSet(notifiers)
+        
+        # initialize langfuse
+        langfuse = Langfuse(public_key=langfuseConfig.publicKey, 
+            secret_key=langfuseConfig.privateKey, 
+            base_url=langfuseConfig.baseUrl, tracing_enabled=langfuseConfig.enabled
+        )
+        if langfuseConfig.enabled:
+            assert langfuse.auth_check()
 
         # initialize two services
         self.rabbitmqService = RabbitMQService(rabbitMQConfig, self.taskQueue, rabbitMQConfig.logger)
-        self.agentService = AgentService(agentOptionsConfig, self.taskQueue, self.pgClient, notifierSet)
+        self.agentService = AgentService(agentOptionsConfig, self.taskQueue, self.pgClient, notifierSet, langfuse)
 
     async def start(self):
         if self.rabbitmqService is None or self.agentService is None:

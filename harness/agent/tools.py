@@ -3,6 +3,7 @@ from typing import Any, Final
 from claude_agent_sdk import McpSdkServerConfig, create_sdk_mcp_server, tool
 from pydantic import ValidationError
 
+from constants.constants import Status
 from notifier.notifier import Action, NotifierSet
 
 KUBEMCP_READ_TOOLS: Final = set(
@@ -84,7 +85,7 @@ def approval_server_for(notifierSet: NotifierSet, event_id: str, session_id: str
         tools = ", ".join(action.tool for action in actions)
         return {"content": [{"type": "text", "text": (
             f"Approval requested for: {tools}. Nothing has been applied. "
-            "End your run now with outcome \"awaiting_approval\"; "
+            f"End your run now with status \"{Status.WAITING_HUMAN_APPROVAL}\"; "
             "the session resumes once a human approves."
         )}]}
 
